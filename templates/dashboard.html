@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard | BMS{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<section class="welcome-panel">
+    <div>
+        <p class="eyebrow">Welcome back</p>
+        <h2>Business Overview</h2>
+    </div>
+    <button class="primary-btn" type="button">Generate Report</button>
+</section>
+
+<section class="stats-grid" aria-label="Business summary">
+    <article class="stat-card revenue">
+        <div class="stat-header">
+            <span class="stat-label">Revenue</span>
+            <span class="stat-icon" aria-hidden="true">↗</span>
+        </div>
+        <h3>$0</h3>
+        <p>vs. last month</p>
+    </article>
+
+    <article class="stat-card sales">
+        <div class="stat-header">
+            <span class="stat-label">Sales</span>
+            <span class="stat-icon" aria-hidden="true">◌</span>
+        </div>
+        <h3>0 sales</h3>
+        <p>Orders this period</p>
+    </article>
+
+    <article class="stat-card products">
+        <div class="stat-header">
+            <span class="stat-label">Products</span>
+            <span class="stat-icon" aria-hidden="true">▣</span>
+        </div>
+        <h3>0</h3>
+        <p>Items in catalog</p>
+    </article>
+
+    <article class="stat-card employees">
+        <div class="stat-header">
+            <span class="stat-label">Employees</span>
+            <span class="stat-icon" aria-hidden="true">☰</span>
+        </div>
+        <h3>0</h3>
+        <p>Active staff</p>
+    </article>
+</section>
+
+<section class="content-grid">
+    <article class="panel-card activity-panel">
+        <div class="panel-header">
+            <h3>Recent Activity</h3>
+            <button class="text-btn" type="button">View all</button>
+        </div>
+
+        <div class="empty-state-box">
+            <p>No recent activity yet.</p>
+        </div>
+    </article>
+
+    <article class="panel-card stock-panel">
+        <div class="panel-header">
+            <h3>Low Stock</h3>
+            <button class="text-btn" type="button">Review</button>
+        </div>
+
+        <div class="empty-state-box">
+            <p>No low-stock products to display.</p>
+        </div>
+    </article>
+</section>
+{% endblock %}

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title }} | BMS{% endblock %}
+{% block page_title %}{{ page_title }}{% endblock %}
+
+{% block content %}
+<section class="placeholder-panel">
+    <div class="placeholder-card">
+        <div class="placeholder-icon" aria-hidden="true">🚧</div>
+        <h2>{{ page_title }}</h2>
+        <p>{{ message }}</p>
+        <a class="primary-btn" href="{{ url_for('home') }}">Back to Dashboard</a>
+    </div>
+</section>
+{% endblock %}

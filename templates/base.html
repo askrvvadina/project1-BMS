@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}BMS{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+
+<body class="app-shell">
+    <div class="app-layout">
+        <aside class="sidebar" id="sidebar">
+            <div class="brand" aria-label="Business Management System logo">
+                <div class="brand-mark">B</div>
+                <div class="brand-text">
+                    <span class="brand-name">BMS</span>
+                    <small>Business Suite</small>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav" aria-label="Main navigation">
+                {% set nav_items = [
+                    ('Dashboard', 'home', '⌂'),
+                    ('Employees', 'employees', '👥'),
+                    ('Shifts', 'shifts', '🕒'),
+                    ('Products', 'products', '📦'),
+                    ('Categories', 'categories', '🗂️'),
+                    ('Inventory', 'inventory', '📊'),
+                    ('Sales', 'sales', '💰'),
+                    ('Customers', 'customers', '🧾'),
+                    ('Analytics', 'analytics', '📈')
+                ] %}
+
+                {% for label, route_name, icon in nav_items %}
+                    {% set href = url_for(route_name) %}
+                    <a class="nav-item {{ 'active' if request.path == href else '' }}" href="{{ href }}">
+                        <span class="nav-icon" aria-hidden="true">{{ icon }}</span>
+                        <span>{{ label }}</span>
+                    </a>
+                {% endfor %}
+            </nav>
+
+            <div class="sidebar-footer">
+                <a class="nav-item footer-item" href="{{ url_for('profile') }}">
+                    <span class="nav-icon" aria-hidden="true">👤</span>
+                    <span>Profile</span>
+                </a>
+                <a class="nav-item footer-item" href="{{ url_for('logout') }}">
+                    <span class="nav-icon" aria-hidden="true">↩</span>
+                    <span>Logout</span>
+                </a>
+            </div>
+        </aside>
+
+        <div class="main-panel">
+            <header class="topbar">
+                <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Toggle sidebar" aria-expanded="false">
+                    ☰
+                </button>
+
+                <div class="topbar-spacer"></div>
+
+                <button class="icon-button" type="button" aria-label="Notifications">
+                    🔔
+                </button>
+
+                <div class="user-chip" aria-label="Current user profile">
+                    <div class="avatar">JD</div>
+                    <div class="user-meta">
+                        <span class="user-name">John Doe</span>
+                        <small>Manager</small>
+                    </div>
+                </div>
+            </header>
+
+            <main class="page-shell">
+                {% if request.path != url_for('login') and request.path != url_for('register') %}
+                    <div class="page-header">
+                        <div>
+                            <p class="eyebrow">Overview</p>
+                            <h1>{% block page_title %}Dashboard{% endblock %}</h1>
+                        </div>
+                    </div>
+                {% endif %}
+
+                {% block content %}{% endblock %}
+            </main>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}" defer></script>
+</body>
+
+</html>
