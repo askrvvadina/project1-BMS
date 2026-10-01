@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}Access Denied | BMS{% endblock %}
+{% block page_title %}Access Denied{% endblock %}
+
+{% block content %}
+<section class="auth-page">
+    <div class="auth-card">
+        <div class="auth-brand" aria-label="Business Management System logo">
+            <div class="brand-mark">B</div>
+            <div class="brand-text">
+                <span class="brand-name">BMS</span>
+            </div>
+        </div>
+
+        <h2>Access denied</h2>
+        <p class="auth-subtitle">You do not have permission to access this page.</p>
+
+        <div class="status-action">
+            <a class="primary-btn" href="{{ url_for('home') }}">Back to Dashboard</a>
+        </div>
+    </div>
+</section>
+{% endblock %}

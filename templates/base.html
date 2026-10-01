@@ -9,7 +9,9 @@
 </head>
 
 <body class="app-shell">
+    {% set is_auth_page = request.path in [url_for('login'), url_for('register')] %}
     <div class="app-layout">
+        {% if not is_auth_page %}
         <aside class="sidebar" id="sidebar">
             <div class="brand" aria-label="Business Management System logo">
                 <div class="brand-mark">B</div>
@@ -20,17 +22,41 @@
             </div>
 
             <nav class="sidebar-nav" aria-label="Main navigation">
-                {% set nav_items = [
-                    ('Dashboard', 'home', '⌂'),
-                    ('Employees', 'employees', '👥'),
-                    ('Shifts', 'shifts', '🕒'),
-                    ('Products', 'products', '📦'),
-                    ('Categories', 'categories', '🗂️'),
-                    ('Inventory', 'inventory', '📊'),
-                    ('Sales', 'sales', '💰'),
-                    ('Customers', 'customers', '🧾'),
-                    ('Analytics', 'analytics', '📈')
-                ] %}
+                {% set role = (session.get('role') or '').lower() %}
+                {% if role == 'admin' %}
+                    {% set nav_items = [
+                        ('Dashboard', 'home', '⌂'),
+                        ('Users', 'users', '👥'),
+                        ('Employees', 'employees', '👥'),
+                        ('Shifts', 'shifts', '🕒'),
+                        ('Products', 'products', '📦'),
+                        ('Categories', 'categories', '🗂️'),
+                        ('Inventory', 'inventory', '📊'),
+                        ('Sales', 'sales', '💰'),
+                        ('Customers', 'customers', '🧾'),
+                        ('Analytics', 'analytics', '📈')
+                    ] %}
+                {% elif role == 'manager' %}
+                    {% set nav_items = [
+                        ('Dashboard', 'home', '⌂'),
+                        ('Employees', 'employees', '👥'),
+                        ('Shifts', 'shifts', '🕒'),
+                        ('Products', 'products', '📦'),
+                        ('Categories', 'categories', '🗂️'),
+                        ('Inventory', 'inventory', '📊'),
+                        ('Sales', 'sales', '💰'),
+                        ('Customers', 'customers', '🧾'),
+                        ('Analytics', 'analytics', '📈')
+                    ] %}
+                {% elif role == 'employee' %}
+                    {% set nav_items = [
+                        ('Dashboard', 'home', '⌂'),
+                        ('Products', 'products', '📦'),
+                        ('Sales', 'sales', '💰')
+                    ] %}
+                {% else %}
+                    {% set nav_items = [] %}
+                {% endif %}
 
                 {% for label, route_name, icon in nav_items %}
                     {% set href = url_for(route_name) %}
@@ -42,18 +68,27 @@
             </nav>
 
             <div class="sidebar-footer">
-                <a class="nav-item footer-item" href="{{ url_for('profile') }}">
-                    <span class="nav-icon" aria-hidden="true">👤</span>
-                    <span>Profile</span>
-                </a>
+                {% if role == 'employee' %}
+                    <a class="nav-item footer-item" href="{{ url_for('profile') }}">
+                        <span class="nav-icon" aria-hidden="true">👤</span>
+                        <span>Profile</span>
+                    </a>
+                {% elif role in ['admin', 'manager'] %}
+                    <a class="nav-item footer-item" href="{{ url_for('profile') }}">
+                        <span class="nav-icon" aria-hidden="true">👤</span>
+                        <span>Profile</span>
+                    </a>
+                {% endif %}
                 <a class="nav-item footer-item" href="{{ url_for('logout') }}">
                     <span class="nav-icon" aria-hidden="true">↩</span>
                     <span>Logout</span>
                 </a>
             </div>
         </aside>
+        {% endif %}
 
         <div class="main-panel">
+            {% if not is_auth_page %}
             <header class="topbar">
                 <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-label="Toggle sidebar" aria-expanded="false">
                     ☰
@@ -66,16 +101,27 @@
                 </button>
 
                 <div class="user-chip" aria-label="Current user profile">
-                    <div class="avatar">JD</div>
+                    <div class="avatar">{{ (session.get('username') or 'G')[:2]|upper }}</div>
                     <div class="user-meta">
-                        <span class="user-name">John Doe</span>
-                        <small>Manager</small>
+                        <span class="user-name">{{ session.get('username') or 'Guest' }}</span>
+                        <small>{{ (session.get('role') or 'Guest')|title }}</small>
                     </div>
                 </div>
             </header>
+            {% endif %}
 
             <main class="page-shell">
-                {% if request.path != url_for('login') and request.path != url_for('register') %}
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                    <div class="flash-stack" aria-live="polite">
+                        {% for category, message in messages %}
+                        <div class="flash-message {{ category }}">{{ message }}</div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                {% endwith %}
+
+                {% if not is_auth_page %}
                     <div class="page-header">
                         <div>
                             <p class="eyebrow">Overview</p>

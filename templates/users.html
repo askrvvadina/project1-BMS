@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}Users{% endblock %}
+{% block page_title %}Users{% endblock %}
+
+{% block content %}
+<section class="users-panel panel-card">
+    <div class="panel-header">
+        <h3>User Accounts</h3>
+        <span class="users-count">{{ users|length }} total</span>
+    </div>
+
+    {% if users %}
+    <div class="table-wrap">
+        <table class="users-table">
+            <thead>
+                <tr>
+                    <th>Username</th>
+                    <th>Email</th>
+                    <th>Role</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for user in users %}
+                <tr>
+                    <td>{{ user.username }}</td>
+                    <td>{{ user.email }}</td>
+                    <td>{{ user.role|title }}</td>
+                    <td>
+                        <span class="status-badge {{ 'active' if user.is_active else 'inactive' }}">
+                            {{ 'Active' if user.is_active else 'Inactive' }}
+                        </span>
+                    </td>
+                    <td>
+                        {% if user.id != current_user_id %}
+                        <form method="POST" action="{{ url_for('toggle_user_active', user_id=user.id) }}">
+                            <button class="toggle-btn {{ 'secondary' if user.is_active else 'primary' }}" type="submit">
+                                {{ 'Deactivate' if user.is_active else 'Activate' }}
+                            </button>
+                        </form>
+                        {% else %}
+                        <span class="current-admin-label">Current Admin</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state-box">
+        <p>No users found.</p>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

@@ -16,15 +16,15 @@
         <h2>Welcome back</h2>
         <p class="auth-subtitle">Sign in to continue to your workspace.</p>
 
-        <form class="auth-form" action="{{ url_for('login') }}" method="get">
+        <form class="auth-form" action="{{ url_for('login') }}" method="post">
             <div class="form-group">
                 <label for="login-identifier">Email or Username</label>
-                <input id="login-identifier" name="identifier" type="text" placeholder="Enter your email or username" autocomplete="username">
+                <input id="login-identifier" name="identifier" type="text" placeholder="Enter your email or username" autocomplete="username" required>
             </div>
 
             <div class="form-group">
                 <label for="login-password">Password</label>
-                <input id="login-password" name="password" type="password" placeholder="Enter your password" autocomplete="current-password">
+                <input id="login-password" name="password" type="password" placeholder="Enter your password" autocomplete="current-password" required>
             </div>
 
             <div class="checkbox-row">

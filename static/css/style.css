@@ -259,6 +259,32 @@ button {
     margin-bottom: 22px;
 }
 
+.flash-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0 0 18px;
+}
+
+.flash-message {
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid transparent;
+    font-weight: 600;
+}
+
+.flash-message.success {
+    background: rgba(29, 191, 115, 0.12);
+    border-color: rgba(29, 191, 115, 0.2);
+    color: #0f7a4d;
+}
+
+.flash-message.error {
+    background: rgba(240, 98, 98, 0.11);
+    border-color: rgba(240, 98, 98, 0.2);
+    color: #a53333;
+}
+
 .page-header h1 {
     margin: 4px 0 0;
     font-size: clamp(2rem, 3vw, 2.55rem);
@@ -652,6 +678,19 @@ button {
     outline: none;
 }
 
+.status-action {
+    display: flex;
+    justify-content: center;
+    margin-top: 12px;
+}
+
+.status-action .primary-btn {
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
 .placeholder-panel {
     display: flex;
     justify-content: center;
@@ -697,12 +736,164 @@ button {
     text-decoration: none;
 }
 
+.users-panel {
+    overflow: hidden;
+}
+
+.users-count {
+    color: var(--text-soft);
+    font-size: 0.84rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.table-wrap {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.users-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 720px;
+}
+
+.users-table th,
+.users-table td {
+    text-align: left;
+    padding: 14px 12px;
+    border-bottom: 1px solid var(--line);
+}
+
+.users-table th {
+    color: var(--text-soft);
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: rgba(52, 84, 209, 0.02);
+}
+
+.users-table td {
+    font-size: 0.96rem;
+}
+
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 92px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 0.76rem;
+    font-weight: 700;
+}
+
+.status-badge.active {
+    background: rgba(29, 191, 115, 0.12);
+    color: #0f7a4d;
+}
+
+.status-badge.inactive {
+    background: rgba(240, 98, 98, 0.1);
+    color: #a53333;
+}
+
+.toggle-btn {
+    border: none;
+    border-radius: 10px;
+    padding: 9px 12px;
+    font-weight: 700;
+    cursor: pointer;
+    color: white;
+}
+
+.toggle-btn.primary {
+    background: linear-gradient(135deg, var(--primary) 0%, #5276f4 100%);
+}
+
+.toggle-btn.secondary {
+    background: linear-gradient(135deg, #f06262 0%, #e36363 100%);
+}
+
+.current-admin-label {
+    color: var(--text-soft);
+    font-weight: 600;
+    font-size: 0.82rem;
+}
+
+.profile-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    gap: 20px;
+    align-items: start;
+}
+
+.profile-summary {
+    min-height: 100%;
+}
+
+.profile-header {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    margin-bottom: 24px;
+}
+
+.profile-avatar {
+    width: 64px;
+    height: 64px;
+    border-radius: 18px;
+    background: linear-gradient(135deg, var(--primary) 0%, #7aa2ff 100%);
+    color: white;
+    display: grid;
+    place-items: center;
+    font-weight: 700;
+    font-size: 1.2rem;
+}
+
+.profile-header h2 {
+    margin: 6px 0 0;
+    font-size: clamp(1.6rem, 2vw, 2.1rem);
+}
+
+.profile-details {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.detail-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: #fafcff;
+}
+
+.detail-row span {
+    color: var(--text-soft);
+    font-weight: 600;
+}
+
+.detail-row strong {
+    font-size: 0.96rem;
+}
+
+.password-panel .auth-form {
+    gap: 18px;
+}
+
 @media (max-width: 1100px) {
     .stats-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    .content-grid {
+    .content-grid,
+    .profile-layout {
         grid-template-columns: 1fr;
     }
 }
