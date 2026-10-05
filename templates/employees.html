@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}Employees{% endblock %}
+{% block page_title %}Employees{% endblock %}
+
+{% block content %}
+<section class="panel-card employees-panel">
+    <div class="panel-header split-header">
+        <h3>Employee Directory</h3>
+        <a class="primary-btn" href="{{ url_for('employee_create') }}">Add Employee</a>
+    </div>
+
+    <form class="employee-toolbar" method="GET" action="{{ url_for('employees') }}">
+        <div class="toolbar-field search-field">
+            <label for="employee-search">Search</label>
+            <input id="employee-search" name="q" type="search" value="{{ search_query }}" placeholder="Name, title, email...">
+        </div>
+
+        <div class="toolbar-field">
+            <label for="branch-filter">Branch</label>
+            <select id="branch-filter" name="branch_id">
+                <option value="">All branches</option>
+                {% for branch in branches %}
+                <option value="{{ branch.id }}" {{ 'selected' if active_branch and active_branch|int == branch.id else '' }}>{{ branch.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="toolbar-field">
+            <label for="status-filter">Status</label>
+            <select id="status-filter" name="status">
+                <option value="">All statuses</option>
+                <option value="active" {{ 'selected' if active_status == 'active' else '' }}>Active</option>
+                <option value="inactive" {{ 'selected' if active_status == 'inactive' else '' }}>Inactive</option>
+            </select>
+        </div>
+
+        <div class="toolbar-field">
+            <label for="sort-filter">Sort by</label>
+            <select id="sort-filter" name="sort">
+                <option value="hire_newest" {{ 'selected' if active_sort == 'hire_newest' or not active_sort else '' }}>Newest hire</option>
+                <option value="hire_oldest" {{ 'selected' if active_sort == 'hire_oldest' else '' }}>Oldest hire</option>
+                <option value="name_asc" {{ 'selected' if active_sort == 'name_asc' else '' }}>Name A-Z</option>
+                <option value="name_desc" {{ 'selected' if active_sort == 'name_desc' else '' }}>Name Z-A</option>
+            </select>
+        </div>
+
+        <div class="toolbar-actions">
+            <button class="primary-btn" type="submit">Apply</button>
+            <a class="text-btn" href="{{ url_for('employees') }}">Clear</a>
+        </div>
+    </form>
+
+    {% if employees %}
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Position</th>
+                    <th>Branch</th>
+                    <th>Email</th>
+                    <th>Hire Date</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in employees %}
+                {% set employee = row.employee %}
+                <tr>
+                    <td>{{ employee.full_name }}</td>
+                    <td>{{ employee.position }}</td>
+                    <td>{{ row.branch_name }}</td>
+                    <td>{{ employee.email or '—' }}</td>
+                    <td>{{ employee.hire_date.strftime('%d %b %Y') if employee.hire_date else '—' }}</td>
+                    <td>
+                        <span class="status-badge {{ 'active' if employee.status == 'active' else 'inactive' }}">
+                            {{ 'Active' if employee.status == 'active' else 'Inactive' }}
+                        </span>
+                    </td>
+                    <td>
+                        <div class="row-actions">
+                            <a class="table-link" href="{{ url_for('employee_detail', employee_id=employee.id) }}">View</a>
+                            <a class="table-link" href="{{ url_for('employee_edit', employee_id=employee.id) }}">Edit</a>
+                            <form method="POST" action="{{ url_for('employee_delete', employee_id=employee.id) }}" onsubmit="return confirm('Delete this employee?');">
+                                <button class="danger-btn" type="submit">Delete</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state-box">
+        <div>
+            <div class="placeholder-icon">👤</div>
+            <p>No employees match the current filters.</p>
+        </div>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

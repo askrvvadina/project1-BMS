@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}{{ employee.full_name }}{% endblock %}
+{% block page_title %}Employee Detail{% endblock %}
+
+{% block content %}
+<section class="branch-detail-grid">
+    <div class="panel-card profile-summary">
+        <div class="profile-header">
+            <div class="profile-avatar">{{ employee.full_name[:2]|upper }}</div>
+            <div>
+                <p class="eyebrow">Employee</p>
+                <h2>{{ employee.full_name }}</h2>
+            </div>
+        </div>
+
+        <div class="profile-details">
+            <div class="detail-row">
+                <span>Position</span>
+                <strong>{{ employee.position }}</strong>
+            </div>
+            <div class="detail-row">
+                <span>Branch</span>
+                <strong>{{ branch.name if branch else 'Unknown branch' }}</strong>
+            </div>
+            <div class="detail-row">
+                <span>Status</span>
+                <strong>
+                    <span class="status-badge {{ 'active' if employee.status == 'active' else 'inactive' }}">
+                        {{ 'Active' if employee.status == 'active' else 'Inactive' }}
+                    </span>
+                </strong>
+            </div>
+            <div class="detail-row">
+                <span>Hire date</span>
+                <strong>{{ employee.hire_date.strftime('%d %b %Y') if employee.hire_date else '—' }}</strong>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel-card">
+        <div class="panel-header split-header">
+            <h3>Contact & Details</h3>
+            <a class="text-btn" href="{{ url_for('employees') }}">Back to employees</a>
+        </div>
+
+        <div class="profile-details">
+            <div class="detail-row">
+                <span>Phone</span>
+                <strong>{{ employee.phone or '—' }}</strong>
+            </div>
+            <div class="detail-row">
+                <span>Email</span>
+                <strong>{{ employee.email or '—' }}</strong>
+            </div>
+            <div class="detail-row">
+                <span>Employee ID</span>
+                <strong>#{{ employee.id }}</strong>
+            </div>
+        </div>
+
+        <div class="status-action">
+            <a class="primary-btn" href="{{ url_for('employee_edit', employee_id=employee.id) }}">Edit Employee</a>
+        </div>
+    </div>
+</section>
+{% endblock %}

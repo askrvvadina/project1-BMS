@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}{{ branch.name }}{% endblock %}
+{% block page_title %}{{ branch.name }}{% endblock %}
+
+{% block content %}
+<section class="branch-detail-grid">
+    <div class="panel-card detail-panel">
+        <div class="panel-header split-header">
+            <h3>Branch Overview</h3>
+            <a class="text-btn" href="{{ url_for('branches') }}">Back</a>
+        </div>
+
+        <div class="profile-details">
+            <div class="detail-row">
+                <span>Name</span>
+                <strong>{{ branch.name }}</strong>
+            </div>
+            <div class="detail-row">
+                <span>Address</span>
+                <strong>{{ branch.address }}</strong>
+            </div>
+            <div class="detail-row">
+                <span>Phone</span>
+                <strong>{{ branch.phone or 'Not provided' }}</strong>
+            </div>
+            <div class="detail-row">
+                <span>Status</span>
+                <strong>
+                    <span class="status-badge {{ 'active' if branch.status == 'active' else 'inactive' }}">
+                        {{ 'Active' if branch.status == 'active' else 'Inactive' }}
+                    </span>
+                </strong>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel-card metrics-panel">
+        <div class="panel-header">
+            <h3>Indicators</h3>
+        </div>
+
+        <div class="metrics-list">
+            <div class="metric-box">
+                <span>Employees</span>
+                <strong>{{ employee_count }}</strong>
+            </div>
+            <div class="metric-box">
+                <span>Products</span>
+                <strong>{{ product_count }}</strong>
+            </div>
+            <div class="metric-box">
+                <span>Sales</span>
+                <strong>{{ sales_count }}</strong>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}

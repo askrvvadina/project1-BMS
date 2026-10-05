@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Branches{% endblock %}
+{% block page_title %}Branches{% endblock %}
+
+{% block content %}
+<section class="panel-card branches-panel">
+    <div class="panel-header split-header">
+        <h3>Branch Directory</h3>
+        <a class="primary-btn" href="{{ url_for('branch_create') }}">Create Branch</a>
+    </div>
+
+    {% if branches %}
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Address</th>
+                    <th>Phone</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for branch in branches %}
+                <tr>
+                    <td>{{ branch.name }}</td>
+                    <td>{{ branch.address }}</td>
+                    <td>{{ branch.phone or '—' }}</td>
+                    <td>
+                        <span class="status-badge {{ 'active' if branch.status == 'active' else 'inactive' }}">
+                            {{ 'Active' if branch.status == 'active' else 'Inactive' }}
+                        </span>
+                    </td>
+                    <td>
+                        <div class="row-actions">
+                            <a class="table-link" href="{{ url_for('branch_detail', branch_id=branch.id) }}">View</a>
+                            <a class="table-link" href="{{ url_for('branch_edit', branch_id=branch.id) }}">Edit</a>
+                            <form method="POST" action="{{ url_for('branch_delete', branch_id=branch.id) }}" onsubmit="return confirm('Delete this branch? This action cannot be undone.');">
+                                <button class="danger-btn" type="submit">Delete</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state-box">
+        <div>
+            <div class="placeholder-icon">🏢</div>
+            <p>No branches have been created yet.</p>
+        </div>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

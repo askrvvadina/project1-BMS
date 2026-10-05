@@ -822,6 +822,7 @@ button {
     font-size: 0.82rem;
 }
 
+.branch-detail-grid,
 .profile-layout {
     display: grid;
     grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
@@ -887,13 +888,172 @@ button {
     gap: 18px;
 }
 
+.split-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.employee-toolbar {
+    display: grid;
+    grid-template-columns: minmax(180px, 2fr) repeat(3, minmax(140px, 1fr)) auto;
+    gap: 14px;
+    align-items: end;
+    padding: 18px 0 10px;
+}
+
+.toolbar-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.toolbar-field label {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--text-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.toolbar-field input,
+.toolbar-field select {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #f9fbff;
+    color: var(--text);
+    font: inherit;
+    padding: 11px 12px;
+}
+
+.toolbar-field input:focus,
+.toolbar-field select:focus {
+    border-color: rgba(52, 84, 209, 0.7);
+    box-shadow: 0 0 0 4px rgba(52, 84, 209, 0.08);
+    outline: none;
+    background: white;
+}
+
+.toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.employee-toolbar .primary-btn {
+    box-shadow: none;
+    padding-inline: 16px;
+}
+
+.branches-panel,
+.form-panel {
+    overflow: hidden;
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 700px;
+}
+
+.data-table th,
+.data-table td {
+    text-align: left;
+    padding: 14px 12px;
+    border-bottom: 1px solid var(--line);
+}
+
+.data-table th {
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-soft);
+    background: rgba(52, 84, 209, 0.02);
+}
+
+.data-table td {
+    font-size: 0.96rem;
+}
+
+.row-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.table-link {
+    color: var(--primary);
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.table-link:hover,
+.table-link:focus-visible {
+    text-decoration: underline;
+    outline: none;
+}
+
+.danger-btn {
+    border: none;
+    border-radius: 10px;
+    background: rgba(240, 98, 98, 0.12);
+    color: #a53333;
+    padding: 8px 10px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.danger-btn:hover,
+.danger-btn:focus-visible {
+    background: rgba(240, 98, 98, 0.18);
+    outline: none;
+}
+
+.metrics-list {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.metric-box {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 18px 16px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: #fafcff;
+}
+
+.metric-box span {
+    color: var(--text-soft);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+}
+
+.metric-box strong {
+    font-size: 1.7rem;
+    letter-spacing: -0.05em;
+}
+
 @media (max-width: 1100px) {
     .stats-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .content-grid,
-    .profile-layout {
+    .profile-layout,
+    .branch-detail-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .metrics-list {
         grid-template-columns: 1fr;
     }
 }
@@ -925,6 +1085,15 @@ button {
     .page-shell {
         padding: 20px 18px 28px;
     }
+
+    .employee-toolbar {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .toolbar-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-start;
+    }
 }
 
 @media (max-width: 640px) {
@@ -953,5 +1122,9 @@ button {
     .panel-card,
     .stat-card {
         padding: 18px 16px;
+    }
+
+    .employee-toolbar {
+        grid-template-columns: 1fr;
     }
 }

@@ -1,9 +1,11 @@
 import os
+from datetime import datetime
 from functools import wraps
 
 import click
 from flask import Flask, flash, redirect, render_template, request, session, url_for
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import or_
 from werkzeug.security import check_password_hash, generate_password_hash
 
 
@@ -44,12 +46,15 @@ def role_required(*allowed_roles):
     return decorator
 
 
-def create_app():
+def create_app(config=None):
     app = Flask(__name__, template_folder="../templates", static_folder="../static")
 
     app.config["SECRET_KEY"] = os.environ.get("BMS_SECRET_KEY", "dev-secret-key-change-me")
     app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///bms.db"
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+    if config is not None:
+        app.config.update(config)
 
     db.init_app(app)
 
@@ -259,15 +264,399 @@ def create_app():
         flash(f"User '{target_user.username}' has been {status}.", "success")
         return redirect(url_for("users"))
 
+    @app.route("/branches")
+    @login_required
+    @role_required("admin")
+    def branches():
+        branch_list = models.Branch.query.order_by(models.Branch.name.asc()).all()
+        return render_template("branches.html", branches=branch_list)
+
+    @app.route("/branches/<int:branch_id>")
+    @login_required
+    @role_required("admin")
+    def branch_detail(branch_id):
+        branch = models.Branch.query.get(branch_id)
+        if branch is None:
+            flash("Branch not found.", "error")
+            return redirect(url_for("branches"))
+
+        employee_count = models.Employee.query.filter_by(branch_id=branch.id).count()
+        product_count = models.Product.query.filter_by(branch_id=branch.id).count()
+        sales_count = models.Sale.query.filter_by(branch_id=branch.id).count()
+        return render_template(
+            "branch_detail.html",
+            branch=branch,
+            employee_count=employee_count,
+            product_count=product_count,
+            sales_count=sales_count,
+        )
+
+    @app.route("/branches/create", methods=["GET", "POST"])
+    @login_required
+    @role_required("admin")
+    def branch_create():
+        if request.method == "POST":
+            name = request.form.get("name", "").strip()
+            address = request.form.get("address", "").strip()
+            phone = request.form.get("phone", "").strip()
+            status = request.form.get("status", "").strip().lower()
+
+            if not name:
+                flash("Branch name is required.", "error")
+                return render_template("branch_form.html", branch=None, mode="create", form_action=url_for("branch_create"))
+
+            if not address:
+                flash("Branch address is required.", "error")
+                return render_template("branch_form.html", branch=None, mode="create", form_action=url_for("branch_create"))
+
+            if status not in {"active", "inactive"}:
+                flash("Branch status must be either active or inactive.", "error")
+                return render_template("branch_form.html", branch=None, mode="create", form_action=url_for("branch_create"))
+
+            branch = models.Branch(name=name, address=address, phone=phone or None, status=status)
+            db.session.add(branch)
+            db.session.commit()
+            flash("Branch created successfully.", "success")
+            return redirect(url_for("branches"))
+
+        return render_template("branch_form.html", branch=None, mode="create", form_action=url_for("branch_create"))
+
+    @app.route("/branches/<int:branch_id>/edit", methods=["GET", "POST"])
+    @login_required
+    @role_required("admin")
+    def branch_edit(branch_id):
+        branch = models.Branch.query.get(branch_id)
+        if branch is None:
+            flash("Branch not found.", "error")
+            return redirect(url_for("branches"))
+
+        if request.method == "POST":
+            branch.name = request.form.get("name", "").strip()
+            branch.address = request.form.get("address", "").strip()
+            branch.phone = request.form.get("phone", "").strip() or None
+            branch.status = request.form.get("status", "").strip().lower()
+
+            if not branch.name:
+                flash("Branch name is required.", "error")
+                return render_template("branch_form.html", branch=branch, mode="edit", form_action=url_for("branch_edit", branch_id=branch.id))
+
+            if not branch.address:
+                flash("Branch address is required.", "error")
+                return render_template("branch_form.html", branch=branch, mode="edit", form_action=url_for("branch_edit", branch_id=branch.id))
+
+            if branch.status not in {"active", "inactive"}:
+                flash("Branch status must be either active or inactive.", "error")
+                return render_template("branch_form.html", branch=branch, mode="edit", form_action=url_for("branch_edit", branch_id=branch.id))
+
+            db.session.commit()
+            flash("Branch updated successfully.", "success")
+            return redirect(url_for("branches"))
+
+        return render_template("branch_form.html", branch=branch, mode="edit", form_action=url_for("branch_edit", branch_id=branch.id))
+
+    @app.route("/branches/<int:branch_id>/delete", methods=["POST"])
+    @login_required
+    @role_required("admin")
+    def branch_delete(branch_id):
+        branch = models.Branch.query.get(branch_id)
+        if branch is None:
+            flash("Branch not found.", "error")
+            return redirect(url_for("branches"))
+
+        dependent_checks = [
+            (models.Employee.query.filter_by(branch_id=branch.id).first(), "employees"),
+            (models.Product.query.filter_by(branch_id=branch.id).first(), "products"),
+            (models.Sale.query.filter_by(branch_id=branch.id).first(), "sales"),
+            (models.Expense.query.filter_by(branch_id=branch.id).first(), "expenses"),
+        ]
+
+        if any(record is not None for record, _ in dependent_checks):
+            flash("This branch cannot be deleted because it has related business records in the system.", "error")
+            return redirect(url_for("branches"))
+
+        db.session.delete(branch)
+        db.session.commit()
+        flash("Branch deleted successfully.", "success")
+        return redirect(url_for("branches"))
+
     @app.route("/employees")
     @login_required
     @role_required("admin", "manager")
     def employees():
+        query = models.Employee.query
+
+        search_term = request.args.get("q", "").strip()
+        branch_filter = request.args.get("branch_id", "").strip()
+        status_filter = request.args.get("status", "").strip().lower()
+        sort_option = request.args.get("sort", "hire_newest").strip().lower()
+
+        if search_term:
+            pattern = f"%{search_term}%"
+            query = query.filter(
+                or_(
+                    models.Employee.full_name.ilike(pattern),
+                    models.Employee.position.ilike(pattern),
+                    models.Employee.email.ilike(pattern),
+                    models.Employee.phone.ilike(pattern),
+                )
+            )
+
+        if branch_filter:
+            try:
+                branch_id = int(branch_filter)
+            except ValueError:
+                branch_id = None
+            if branch_id is not None and models.Branch.query.get(branch_id) is not None:
+                query = query.filter(models.Employee.branch_id == branch_id)
+
+        if status_filter in {"active", "inactive"}:
+            query = query.filter(models.Employee.status == status_filter)
+
+        sort_map = {
+            "name_asc": models.Employee.full_name.asc(),
+            "name_desc": models.Employee.full_name.desc(),
+            "hire_newest": models.Employee.hire_date.desc(),
+            "hire_oldest": models.Employee.hire_date.asc(),
+        }
+        selected_sort = sort_map.get(sort_option, models.Employee.hire_date.desc())
+        employee_rows = []
+        for employee in query.order_by(selected_sort).all():
+            branch = models.Branch.query.get(employee.branch_id)
+            employee_rows.append({
+                "employee": employee,
+                "branch_name": branch.name if branch else "Unknown branch",
+            })
+
+        branch_options = models.Branch.query.order_by(models.Branch.name.asc()).all()
         return render_template(
-            "placeholder.html",
-            page_title="Employees",
-            message="Employee management will be implemented in a later development stage."
+            "employees.html",
+            employees=employee_rows,
+            branches=branch_options,
+            search_query=search_term,
+            active_branch=branch_filter,
+            active_status=status_filter,
+            active_sort=sort_option,
         )
+
+    @app.route("/employees/create", methods=["GET", "POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def employee_create():
+        branches = models.Branch.query.order_by(models.Branch.name.asc()).all()
+        if not branches:
+            flash("A branch must be created before adding employee records.", "error")
+            return redirect(url_for("branches"))
+
+        if request.method == "POST":
+            full_name = request.form.get("full_name", "").strip()
+            position = request.form.get("position", "").strip()
+            phone = request.form.get("phone", "").strip()
+            email = request.form.get("email", "").strip()
+            hire_date_raw = request.form.get("hire_date", "").strip()
+            branch_id_raw = request.form.get("branch_id", "").strip()
+            status = request.form.get("status", "").strip().lower()
+
+            form_data = {
+                "full_name": full_name,
+                "position": position,
+                "phone": phone,
+                "email": email,
+                "hire_date": hire_date_raw,
+                "branch_id": branch_id_raw,
+                "status": status,
+            }
+
+            if not full_name:
+                flash("Full name is required.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="create")
+
+            if not position:
+                flash("Position is required.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="create")
+
+            if not hire_date_raw:
+                flash("Hire date is required.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="create")
+
+            try:
+                parsed_hire_date = datetime.strptime(hire_date_raw, "%Y-%m-%d").date()
+            except ValueError:
+                flash("Hire date must be a valid date in YYYY-MM-DD format.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="create")
+
+            if not branch_id_raw:
+                flash("Branch is required.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="create")
+
+            try:
+                branch_id = int(branch_id_raw)
+            except ValueError:
+                flash("A valid branch selection is required.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="create")
+
+            branch = models.Branch.query.get(branch_id)
+            if branch is None:
+                flash("The selected branch does not exist.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="create")
+
+            if status not in {"active", "inactive"}:
+                flash("Employee status must be either active or inactive.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="create")
+
+            if email:
+                existing_email = models.Employee.query.filter(
+                    db.func.lower(models.Employee.email) == email.lower()
+                ).first()
+                if existing_email is not None:
+                    flash("An employee with this email already exists.", "error")
+                    return render_template("employee_form.html", employee=form_data, branches=branches, mode="create")
+
+            employee = models.Employee(
+                full_name=full_name,
+                position=position,
+                phone=phone or None,
+                email=email or None,
+                hire_date=parsed_hire_date,
+                branch_id=branch.id,
+                status=status,
+            )
+            db.session.add(employee)
+            db.session.commit()
+            flash("Employee created successfully.", "success")
+            return redirect(url_for("employees"))
+
+        return render_template("employee_form.html", employee=None, branches=branches, mode="create")
+
+    @app.route("/employees/<int:employee_id>/edit", methods=["GET", "POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def employee_edit(employee_id):
+        employee = models.Employee.query.get(employee_id)
+        if employee is None:
+            flash("Employee not found.", "error")
+            return redirect(url_for("employees"))
+
+        branches = models.Branch.query.order_by(models.Branch.name.asc()).all()
+        if not branches:
+            flash("A branch must be created before editing employee records.", "error")
+            return redirect(url_for("branches"))
+
+        if request.method == "POST":
+            full_name = request.form.get("full_name", "").strip()
+            position = request.form.get("position", "").strip()
+            phone = request.form.get("phone", "").strip()
+            email = request.form.get("email", "").strip()
+            hire_date_raw = request.form.get("hire_date", "").strip()
+            branch_id_raw = request.form.get("branch_id", "").strip()
+            status = request.form.get("status", "").strip().lower()
+
+            form_data = {
+                "full_name": full_name,
+                "position": position,
+                "phone": phone,
+                "email": email,
+                "hire_date": hire_date_raw,
+                "branch_id": branch_id_raw,
+                "status": status,
+            }
+
+            if not full_name:
+                flash("Full name is required.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="edit", employee_id=employee.id)
+
+            if not position:
+                flash("Position is required.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="edit", employee_id=employee.id)
+
+            if not hire_date_raw:
+                flash("Hire date is required.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="edit", employee_id=employee.id)
+
+            try:
+                parsed_hire_date = datetime.strptime(hire_date_raw, "%Y-%m-%d").date()
+            except ValueError:
+                flash("Hire date must be a valid date in YYYY-MM-DD format.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="edit", employee_id=employee.id)
+
+            if not branch_id_raw:
+                flash("Branch is required.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="edit", employee_id=employee.id)
+
+            try:
+                branch_id = int(branch_id_raw)
+            except ValueError:
+                flash("A valid branch selection is required.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="edit", employee_id=employee.id)
+
+            branch = models.Branch.query.get(branch_id)
+            if branch is None:
+                flash("The selected branch does not exist.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="edit", employee_id=employee.id)
+
+            if status not in {"active", "inactive"}:
+                flash("Employee status must be either active or inactive.", "error")
+                return render_template("employee_form.html", employee=form_data, branches=branches, mode="edit", employee_id=employee.id)
+
+            if email:
+                duplicate_email = models.Employee.query.filter(
+                    db.func.lower(models.Employee.email) == email.lower(),
+                    models.Employee.id != employee.id,
+                ).first()
+                if duplicate_email is not None:
+                    flash("An employee with this email already exists.", "error")
+                    return render_template("employee_form.html", employee=form_data, branches=branches, mode="edit", employee_id=employee.id)
+
+            employee.full_name = full_name
+            employee.position = position
+            employee.phone = phone or None
+            employee.email = email or None
+            employee.hire_date = parsed_hire_date
+            employee.branch_id = branch.id
+            employee.status = status
+            db.session.commit()
+            flash("Employee updated successfully.", "success")
+            return redirect(url_for("employees"))
+
+        form_data = {
+            "full_name": employee.full_name,
+            "position": employee.position,
+            "phone": employee.phone or "",
+            "email": employee.email or "",
+            "hire_date": employee.hire_date.isoformat() if employee.hire_date else "",
+            "branch_id": str(employee.branch_id),
+            "status": employee.status,
+        }
+        return render_template("employee_form.html", employee=form_data, branches=branches, mode="edit", employee_id=employee.id)
+
+    @app.route("/employees/<int:employee_id>")
+    @login_required
+    @role_required("admin", "manager")
+    def employee_detail(employee_id):
+        employee = models.Employee.query.get(employee_id)
+        if employee is None:
+            flash("Employee not found.", "error")
+            return redirect(url_for("employees"))
+
+        branch = models.Branch.query.get(employee.branch_id)
+        return render_template("employee_detail.html", employee=employee, branch=branch)
+
+    @app.route("/employees/<int:employee_id>/delete", methods=["POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def employee_delete(employee_id):
+        employee = models.Employee.query.get(employee_id)
+        if employee is None:
+            flash("Employee not found.", "error")
+            return redirect(url_for("employees"))
+
+        if models.Shift.query.filter_by(employee_id=employee.id).first() is not None:
+            flash("This employee cannot be deleted because shift records are associated with them.", "error")
+            return redirect(url_for("employees"))
+
+        db.session.delete(employee)
+        db.session.commit()
+        flash("Employee deleted successfully.", "success")
+        return redirect(url_for("employees"))
 
     @app.route("/shifts")
     @login_required

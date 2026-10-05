@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% set page_title = 'Create Employee' if mode == 'create' else 'Edit Employee' %}
+{% block title %}{{ page_title }}{% endblock %}
+{% block page_title %}{{ page_title }}{% endblock %}
+
+{% block content %}
+<section class="panel-card form-panel">
+    <div class="panel-header split-header">
+        <h3>{{ 'Create Employee' if mode == 'create' else 'Edit Employee' }}</h3>
+        <a class="text-btn" href="{{ url_for('employees') }}">Back to employees</a>
+    </div>
+
+    <form class="auth-form" method="POST" action="{{ url_for('employee_create') if mode == 'create' else url_for('employee_edit', employee_id=employee_id) }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="full_name">Full name</label>
+                <input id="full_name" name="full_name" type="text" value="{{ employee.full_name if employee else '' }}" required>
+            </div>
+
+            <div class="form-group">
+                <label for="position">Position</label>
+                <input id="position" name="position" type="text" value="{{ employee.position if employee else '' }}" required>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="phone">Phone</label>
+                <input id="phone" name="phone" type="text" value="{{ employee.phone if employee and employee.phone else '' }}" placeholder="Optional">
+            </div>
+
+            <div class="form-group">
+                <label for="email">Email</label>
+                <input id="email" name="email" type="email" value="{{ employee.email if employee and employee.email else '' }}" placeholder="Optional">
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="hire_date">Hire date</label>
+                <input id="hire_date" name="hire_date" type="date" value="{{ employee.hire_date if employee and employee.hire_date else '' }}" required>
+            </div>
+
+            <div class="form-group">
+                <label for="status">Status</label>
+                <select id="status" name="status" required>
+                    <option value="active" {{ 'selected' if employee and employee.status == 'active' else '' }}>Active</option>
+                    <option value="inactive" {{ 'selected' if employee and employee.status == 'inactive' else '' }}>Inactive</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="branch_id">Branch</label>
+            <select id="branch_id" name="branch_id" required>
+                <option value="">Select a branch</option>
+                {% for branch in branches %}
+                <option value="{{ branch.id }}" {{ 'selected' if employee and employee.branch_id|int == branch.id else '' }}>{{ branch.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <button type="submit">{{ 'Create Employee' if mode == 'create' else 'Save Changes' }}</button>
+    </form>
+</section>
+{% endblock %}
