@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}Products{% endblock %}
+{% block page_title %}Products{% endblock %}
+
+{% block content %}
+<section class="panel-card products-panel">
+    <div class="panel-header split-header">
+        <h3>Product Directory</h3>
+        {% if (session.get('role') or '').lower() in ['admin', 'manager'] %}
+        <a class="primary-btn" href="{{ url_for('product_create') }}">Add Product</a>
+        {% endif %}
+    </div>
+
+    <form class="employee-toolbar" method="GET" action="{{ url_for('products') }}">
+        <div class="toolbar-field search-field">
+            <label for="product-search">Search</label>
+            <input id="product-search" name="q" type="search" value="{{ search_query }}" placeholder="Product name or SKU">
+        </div>
+
+        <div class="toolbar-field">
+            <label for="category-filter">Category</label>
+            <select id="category-filter" name="category_id">
+                <option value="">All categories</option>
+                {% for category in categories %}
+                <option value="{{ category.id }}" {{ 'selected' if category_filter == category.id|string else '' }}>{{ category.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="toolbar-field">
+            <label for="branch-filter">Branch</label>
+            <select id="branch-filter" name="branch_id">
+                <option value="">All branches</option>
+                {% for branch in branches %}
+                <option value="{{ branch.id }}" {{ 'selected' if branch_filter == branch.id|string else '' }}>{{ branch.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="toolbar-field">
+            <label for="sort-filter">Sort by</label>
+            <select id="sort-filter" name="sort">
+                <option value="name_asc" {{ 'selected' if active_sort == 'name_asc' else '' }}>Name A-Z</option>
+                <option value="name_desc" {{ 'selected' if active_sort == 'name_desc' else '' }}>Name Z-A</option>
+                <option value="price_low" {{ 'selected' if active_sort == 'price_low' else '' }}>Selling price: low-high</option>
+                <option value="price_high" {{ 'selected' if active_sort == 'price_high' else '' }}>Selling price: high-low</option>
+                <option value="stock_low" {{ 'selected' if active_sort == 'stock_low' else '' }}>Stock: low-high</option>
+                <option value="stock_high" {{ 'selected' if active_sort == 'stock_high' else '' }}>Stock: high-low</option>
+            </select>
+        </div>
+
+        <div class="toolbar-actions">
+            <button class="primary-btn" type="submit">Apply</button>
+            <a class="text-btn" href="{{ url_for('products') }}">Clear</a>
+        </div>
+    </form>
+
+    {% if product_rows %}
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>SKU</th>
+                    <th>Category</th>
+                    <th>Branch</th>
+                    <th>Selling Price</th>
+                    <th>Stock</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for product, category_name, branch_name in product_rows %}
+                {% set low_stock = product.stock_quantity <= product.minimum_stock %}
+                <tr>
+                    <td>{{ product.name }}</td>
+                    <td>{{ product.sku }}</td>
+                    <td>{{ category_name }}</td>
+                    <td>{{ branch_name }}</td>
+                    <td>{{ '%.2f'|format(product.selling_price) }}</td>
+                    <td>{{ product.stock_quantity }}</td>
+                    <td>
+                        <span class="status-badge {{ 'inactive' if low_stock else 'active' }}">
+                            {{ 'Low Stock' if low_stock else 'In Stock' }}
+                        </span>
+                    </td>
+                    <td>
+                        <div class="row-actions">
+                            <a class="table-link" href="{{ url_for('product_detail', product_id=product.id) }}">View</a>
+                            {% if (session.get('role') or '').lower() in ['admin', 'manager'] %}
+                            <a class="table-link" href="{{ url_for('product_edit', product_id=product.id) }}">Edit</a>
+                            <form method="POST" action="{{ url_for('product_delete', product_id=product.id) }}" onsubmit="return confirm('Delete this product?');">
+                                <button class="danger-btn" type="submit">Delete</button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state-box">
+        <div>
+            <div class="placeholder-icon" aria-hidden="true">📦</div>
+            <p>No products match the current filters.</p>
+        </div>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

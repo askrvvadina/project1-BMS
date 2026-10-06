@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}{{ product.name }} | Products{% endblock %}
+{% block page_title %}Product Details{% endblock %}
+
+{% block content %}
+<section class="branch-detail-grid">
+    <div class="panel-card detail-panel">
+        <div class="panel-header split-header">
+            <h3>{{ product.name }}</h3>
+            <a class="text-btn" href="{{ url_for('products') }}">Back to products</a>
+        </div>
+
+        <div class="profile-details">
+            <div class="detail-row">
+                <span>SKU</span>
+                <strong>{{ product.sku }}</strong>
+            </div>
+            <div class="detail-row">
+                <span>Category</span>
+                <strong>{{ category.name if category else 'Unknown category' }}</strong>
+            </div>
+            <div class="detail-row">
+                <span>Branch</span>
+                <strong>{{ branch.name if branch else 'Unknown branch' }}</strong>
+            </div>
+            <div class="detail-row">
+                <span>Purchase price</span>
+                <strong>{{ '%.2f'|format(product.purchase_price) }}</strong>
+            </div>
+            <div class="detail-row">
+                <span>Selling price</span>
+                <strong>{{ '%.2f'|format(product.selling_price) }}</strong>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel-card metrics-panel">
+        <div class="panel-header">
+            <h3>Stock</h3>
+        </div>
+
+        <div class="profile-details">
+            <div class="detail-row">
+                <span>Stock quantity</span>
+                <strong>{{ product.stock_quantity }}</strong>
+            </div>
+            <div class="detail-row">
+                <span>Minimum stock</span>
+                <strong>{{ product.minimum_stock }}</strong>
+            </div>
+            <div class="detail-row">
+                <span>Status</span>
+                <strong>
+                    <span class="status-badge {{ 'inactive' if low_stock else 'active' }}">
+                        {{ 'Low Stock' if low_stock else 'In Stock' }}
+                    </span>
+                </strong>
+            </div>
+        </div>
+
+        {% if (session.get('role') or '').lower() in ['admin', 'manager'] %}
+        <div class="status-action">
+            <a class="primary-btn" href="{{ url_for('product_edit', product_id=product.id) }}">Edit Product</a>
+        </div>
+        <div class="status-action">
+            <form method="POST" action="{{ url_for('product_delete', product_id=product.id) }}" onsubmit="return confirm('Delete this product?');">
+                <button class="danger-btn" type="submit">Delete Product</button>
+            </form>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

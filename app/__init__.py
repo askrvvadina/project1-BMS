@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from functools import wraps
 
 import click
@@ -63,6 +64,102 @@ def create_app(config=None):
         return render_template("403.html", requested_path=request.path), 403
 
     from app import models
+
+    def product_form_options():
+        return {
+            "categories": models.Category.query.order_by(models.Category.name.asc()).all(),
+            "branches": models.Branch.query.order_by(models.Branch.name.asc()).all(),
+        }
+
+    def validate_product_form(form_data, current_product_id=None):
+        errors = []
+        name = form_data["name"]
+        sku = form_data["sku"]
+
+        if not name:
+            errors.append("Product name is required.")
+        elif len(name) > 120:
+            errors.append("Product name must be 120 characters or fewer.")
+
+        if not sku:
+            errors.append("SKU is required.")
+        elif len(sku) > 100:
+            errors.append("SKU must be 100 characters or fewer.")
+        else:
+            duplicate_query = models.Product.query.filter(
+                db.func.lower(models.Product.sku) == sku.lower()
+            )
+            if current_product_id is not None:
+                duplicate_query = duplicate_query.filter(
+                    models.Product.id != current_product_id
+                )
+            if duplicate_query.first() is not None:
+                errors.append("A product with this SKU already exists.")
+
+        category = None
+        try:
+            category_id = int(form_data["category_id"])
+            if category_id < 1:
+                raise ValueError
+            category = models.Category.query.filter_by(id=category_id).first()
+        except ValueError:
+            category = None
+        if category is None:
+            errors.append("Select a valid category.")
+
+        branch = None
+        try:
+            branch_id = int(form_data["branch_id"])
+            if branch_id < 1:
+                raise ValueError
+            branch = models.Branch.query.filter_by(id=branch_id).first()
+        except ValueError:
+            branch = None
+        if branch is None:
+            errors.append("Select a valid branch.")
+
+        prices = {}
+        for field, label in (
+            ("purchase_price", "Purchase price"),
+            ("selling_price", "Selling price"),
+        ):
+            try:
+                value = Decimal(form_data[field])
+                if not value.is_finite() or value < 0:
+                    raise InvalidOperation
+                prices[field] = value
+            except InvalidOperation:
+                errors.append(f"{label} must be a valid non-negative number.")
+
+        quantities = {}
+        for field, label in (
+            ("stock_quantity", "Stock quantity"),
+            ("minimum_stock", "Minimum stock"),
+        ):
+            try:
+                value = int(form_data[field])
+                if value < 0:
+                    raise ValueError
+                quantities[field] = value
+            except ValueError:
+                errors.append(f"{label} must be a non-negative whole number.")
+
+        for error in errors:
+            flash(error, "error")
+
+        if errors:
+            return None
+
+        return {
+            "name": name,
+            "sku": sku,
+            "category_id": category.id,
+            "branch_id": branch.id,
+            "purchase_price": prices["purchase_price"],
+            "selling_price": prices["selling_price"],
+            "stock_quantity": quantities["stock_quantity"],
+            "minimum_stock": quantities["minimum_stock"],
+        }
 
     @app.cli.command("create-admin")
     def create_admin():
@@ -672,21 +769,291 @@ def create_app(config=None):
     @login_required
     @role_required("admin", "manager", "employee")
     def products():
-        return render_template(
-            "placeholder.html",
-            page_title="Products",
-            message="Product management will be implemented in a later development stage."
+        search_query = request.args.get("q", "").strip()
+        category_filter = request.args.get("category_id", "").strip()
+        branch_filter = request.args.get("branch_id", "").strip()
+        active_sort = request.args.get("sort", "name_asc")
+
+        query = db.session.query(
+            models.Product,
+            models.Category.name,
+            models.Branch.name,
+        ).join(
+            models.Category, models.Product.category_id == models.Category.id
+        ).join(
+            models.Branch, models.Product.branch_id == models.Branch.id
         )
+
+        if search_query:
+            query = query.filter(
+                or_(
+                    models.Product.name.ilike(f"%{search_query}%"),
+                    models.Product.sku.ilike(f"%{search_query}%"),
+                )
+            )
+
+        if category_filter:
+            try:
+                category_filter_id = int(category_filter)
+            except ValueError:
+                category_filter_id = -1
+            query = query.filter(models.Product.category_id == category_filter_id)
+
+        if branch_filter:
+            try:
+                branch_filter_id = int(branch_filter)
+            except ValueError:
+                branch_filter_id = -1
+            query = query.filter(models.Product.branch_id == branch_filter_id)
+
+        sort_columns = {
+            "name_asc": models.Product.name.asc(),
+            "name_desc": models.Product.name.desc(),
+            "price_low": models.Product.selling_price.asc(),
+            "price_high": models.Product.selling_price.desc(),
+            "stock_low": models.Product.stock_quantity.asc(),
+            "stock_high": models.Product.stock_quantity.desc(),
+        }
+        if active_sort not in sort_columns:
+            active_sort = "name_asc"
+        product_rows = query.order_by(sort_columns[active_sort]).all()
+
+        return render_template(
+            "products.html",
+            product_rows=product_rows,
+            search_query=search_query,
+            category_filter=category_filter,
+            branch_filter=branch_filter,
+            active_sort=active_sort,
+            **product_form_options(),
+        )
+
+    @app.route("/products/<int:product_id>")
+    @login_required
+    @role_required("admin", "manager", "employee")
+    def product_detail(product_id):
+        product = models.Product.query.filter_by(id=product_id).first()
+        if product is None:
+            flash("Product not found.", "error")
+            return redirect(url_for("products"))
+
+        category = models.Category.query.filter_by(id=product.category_id).first()
+        branch = models.Branch.query.filter_by(id=product.branch_id).first()
+        return render_template(
+            "product_detail.html",
+            product=product,
+            category=category,
+            branch=branch,
+            low_stock=product.stock_quantity <= product.minimum_stock,
+        )
+
+    @app.route("/products/create", methods=["GET", "POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def product_create():
+        form_data = {
+            "name": "",
+            "sku": "",
+            "category_id": "",
+            "branch_id": "",
+            "purchase_price": "",
+            "selling_price": "",
+            "stock_quantity": "0",
+            "minimum_stock": "0",
+        }
+
+        if request.method == "POST":
+            for field in form_data:
+                form_data[field] = request.form.get(field, "").strip()
+
+            product_data = validate_product_form(form_data)
+            if product_data is not None:
+                product = models.Product(**product_data)
+                db.session.add(product)
+                db.session.commit()
+                flash("Product created successfully.", "success")
+                return redirect(url_for("products"))
+
+        return render_template(
+            "product_form.html",
+            form_data=form_data,
+            mode="create",
+            **product_form_options(),
+        )
+
+    @app.route("/products/<int:product_id>/edit", methods=["GET", "POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def product_edit(product_id):
+        product = models.Product.query.filter_by(id=product_id).first()
+        if product is None:
+            flash("Product not found.", "error")
+            return redirect(url_for("products"))
+
+        form_data = {
+            "name": product.name,
+            "sku": product.sku,
+            "category_id": str(product.category_id),
+            "branch_id": str(product.branch_id),
+            "purchase_price": str(product.purchase_price),
+            "selling_price": str(product.selling_price),
+            "stock_quantity": str(product.stock_quantity),
+            "minimum_stock": str(product.minimum_stock),
+        }
+
+        if request.method == "POST":
+            for field in form_data:
+                form_data[field] = request.form.get(field, "").strip()
+
+            product_data = validate_product_form(form_data, product.id)
+            if product_data is not None:
+                for field, value in product_data.items():
+                    setattr(product, field, value)
+                db.session.commit()
+                flash("Product updated successfully.", "success")
+                return redirect(url_for("product_detail", product_id=product.id))
+
+        return render_template(
+            "product_form.html",
+            form_data=form_data,
+            product_id=product.id,
+            mode="edit",
+            **product_form_options(),
+        )
+
+    @app.route("/products/<int:product_id>/delete", methods=["POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def product_delete(product_id):
+        product = models.Product.query.filter_by(id=product_id).first()
+        if product is None:
+            flash("Product not found.", "error")
+            return redirect(url_for("products"))
+
+        if models.SaleItem.query.filter_by(product_id=product.id).first() is not None:
+            flash("This product cannot be deleted because it is referenced by sale history.", "error")
+            return redirect(url_for("product_detail", product_id=product.id))
+
+        if models.InventoryTransaction.query.filter_by(product_id=product.id).first() is not None:
+            flash("This product cannot be deleted because it has inventory transaction history.", "error")
+            return redirect(url_for("product_detail", product_id=product.id))
+
+        db.session.delete(product)
+        db.session.commit()
+        flash("Product deleted successfully.", "success")
+        return redirect(url_for("products"))
 
     @app.route("/categories")
     @login_required
     @role_required("admin", "manager")
     def categories():
+        category_list = models.Category.query.order_by(models.Category.name.asc()).all()
+        return render_template("categories.html", categories=category_list)
+
+    @app.route("/categories/create", methods=["GET", "POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def category_create():
+        if request.method == "POST":
+            name = request.form.get("name", "").strip()
+
+            if not name:
+                flash("Category name is required.", "error")
+                return render_template(
+                    "category_form.html",
+                    category=None,
+                    category_name=name,
+                    mode="create",
+                )
+
+            duplicate = models.Category.query.filter(
+                db.func.lower(models.Category.name) == name.lower()
+            ).first()
+            if duplicate is not None:
+                flash("A category with this name already exists.", "error")
+                return render_template(
+                    "category_form.html",
+                    category=None,
+                    category_name=name,
+                    mode="create",
+                )
+
+            category = models.Category(name=name)
+            db.session.add(category)
+            db.session.commit()
+            flash("Category created successfully.", "success")
+            return redirect(url_for("categories"))
+
         return render_template(
-            "placeholder.html",
-            page_title="Categories",
-            message="Category management will be implemented in a later development stage."
+            "category_form.html",
+            category=None,
+            category_name="",
+            mode="create",
         )
+
+    @app.route("/categories/<int:category_id>/edit", methods=["GET", "POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def category_edit(category_id):
+        category = models.Category.query.get(category_id)
+        if category is None:
+            flash("Category not found.", "error")
+            return redirect(url_for("categories"))
+
+        if request.method == "POST":
+            name = request.form.get("name", "").strip()
+
+            if not name:
+                flash("Category name is required.", "error")
+                return render_template(
+                    "category_form.html",
+                    category=category,
+                    category_name=name,
+                    mode="edit",
+                )
+
+            duplicate = models.Category.query.filter(
+                db.func.lower(models.Category.name) == name.lower(),
+                models.Category.id != category.id,
+            ).first()
+            if duplicate is not None:
+                flash("A category with this name already exists.", "error")
+                return render_template(
+                    "category_form.html",
+                    category=category,
+                    category_name=name,
+                    mode="edit",
+                )
+
+            category.name = name
+            db.session.commit()
+            flash("Category updated successfully.", "success")
+            return redirect(url_for("categories"))
+
+        return render_template(
+            "category_form.html",
+            category=category,
+            category_name=category.name,
+            mode="edit",
+        )
+
+    @app.route("/categories/<int:category_id>/delete", methods=["POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def category_delete(category_id):
+        category = models.Category.query.get(category_id)
+        if category is None:
+            flash("Category not found.", "error")
+            return redirect(url_for("categories"))
+
+        if models.Product.query.filter_by(category_id=category.id).first() is not None:
+            flash("This category cannot be deleted because it is used by one or more products.", "error")
+            return redirect(url_for("categories"))
+
+        db.session.delete(category)
+        db.session.commit()
+        flash("Category deleted successfully.", "success")
+        return redirect(url_for("categories"))
 
     @app.route("/inventory")
     @login_required

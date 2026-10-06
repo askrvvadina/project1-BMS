@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% set page_title = 'Create Product' if mode == 'create' else 'Edit Product' %}
+{% block title %}{{ page_title }}{% endblock %}
+{% block page_title %}{{ page_title }}{% endblock %}
+
+{% block content %}
+<section class="panel-card form-panel">
+    <div class="panel-header split-header">
+        <h3>{{ page_title }}</h3>
+        <a class="text-btn" href="{{ url_for('products') }}">Back to products</a>
+    </div>
+
+    <form class="auth-form" method="POST" action="{{ url_for('product_create') if mode == 'create' else url_for('product_edit', product_id=product_id) }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="name">Product name</label>
+                <input id="name" name="name" type="text" value="{{ form_data.name }}" maxlength="120" required>
+            </div>
+            <div class="form-group">
+                <label for="sku">SKU</label>
+                <input id="sku" name="sku" type="text" value="{{ form_data.sku }}" maxlength="100" required>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="category_id">Category</label>
+                <select id="category_id" name="category_id" required>
+                    <option value="">Select a category</option>
+                    {% for category in categories %}
+                    <option value="{{ category.id }}" {{ 'selected' if form_data.category_id == category.id|string else '' }}>{{ category.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="branch_id">Branch</label>
+                <select id="branch_id" name="branch_id" required>
+                    <option value="">Select a branch</option>
+                    {% for branch in branches %}
+                    <option value="{{ branch.id }}" {{ 'selected' if form_data.branch_id == branch.id|string else '' }}>{{ branch.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="purchase_price">Purchase price</label>
+                <input id="purchase_price" name="purchase_price" type="number" min="0" step="any" value="{{ form_data.purchase_price }}" required>
+            </div>
+            <div class="form-group">
+                <label for="selling_price">Selling price</label>
+                <input id="selling_price" name="selling_price" type="number" min="0" step="any" value="{{ form_data.selling_price }}" required>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="stock_quantity">Stock quantity</label>
+                <input id="stock_quantity" name="stock_quantity" type="number" min="0" step="1" value="{{ form_data.stock_quantity }}" required>
+            </div>
+            <div class="form-group">
+                <label for="minimum_stock">Minimum stock</label>
+                <input id="minimum_stock" name="minimum_stock" type="number" min="0" step="1" value="{{ form_data.minimum_stock }}" required>
+            </div>
+        </div>
+
+        <button type="submit">{{ 'Create Product' if mode == 'create' else 'Save Changes' }}</button>
+    </form>
+</section>
+{% endblock %}
