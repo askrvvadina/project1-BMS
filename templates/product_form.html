@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% set page_title = 'Create Product' if mode == 'create' else 'Edit Product' %}
+{% set page_title = 'Создать товар' if mode == 'create' else 'Редактировать товар' %}
 {% block title %}{{ page_title }}{% endblock %}
 {% block page_title %}{{ page_title }}{% endblock %}
 
@@ -8,65 +8,74 @@
 <section class="panel-card form-panel">
     <div class="panel-header split-header">
         <h3>{{ page_title }}</h3>
-        <a class="text-btn" href="{{ url_for('products') }}">Back to products</a>
+        <a class="text-btn" href="{{ url_for('products') }}">Назад к товарам</a>
     </div>
 
     <form class="auth-form" method="POST" action="{{ url_for('product_create') if mode == 'create' else url_for('product_edit', product_id=product_id) }}">
         <div class="form-row">
             <div class="form-group">
-                <label for="name">Product name</label>
+                <label for="name">Название товара</label>
                 <input id="name" name="name" type="text" value="{{ form_data.name }}" maxlength="120" required>
             </div>
             <div class="form-group">
-                <label for="sku">SKU</label>
+                <label for="sku">Артикул</label>
                 <input id="sku" name="sku" type="text" value="{{ form_data.sku }}" maxlength="100" required>
             </div>
         </div>
 
         <div class="form-row">
             <div class="form-group">
-                <label for="category_id">Category</label>
+                <label for="category_id">Категория</label>
                 <select id="category_id" name="category_id" required>
-                    <option value="">Select a category</option>
+                    <option value="">Выберите категорию</option>
                     {% for category in categories %}
                     <option value="{{ category.id }}" {{ 'selected' if form_data.category_id == category.id|string else '' }}>{{ category.name }}</option>
                     {% endfor %}
                 </select>
             </div>
             <div class="form-group">
-                <label for="branch_id">Branch</label>
+                <label for="branch_id">Филиал (для совместимости)</label>
                 <select id="branch_id" name="branch_id" required>
-                    <option value="">Select a branch</option>
+                    <option value="">Выберите филиал</option>
                     {% for branch in branches %}
                     <option value="{{ branch.id }}" {{ 'selected' if form_data.branch_id == branch.id|string else '' }}>{{ branch.name }}</option>
                     {% endfor %}
                 </select>
+                <small>Добавляйте товар в филиалы через раздел «Склад».</small>
             </div>
         </div>
 
         <div class="form-row">
             <div class="form-group">
-                <label for="purchase_price">Purchase price</label>
+                <label for="purchase_price">Закупочная цена</label>
                 <input id="purchase_price" name="purchase_price" type="number" min="0" step="any" value="{{ form_data.purchase_price }}" required>
             </div>
             <div class="form-group">
-                <label for="selling_price">Selling price</label>
+                <label for="selling_price">Цена продажи</label>
                 <input id="selling_price" name="selling_price" type="number" min="0" step="any" value="{{ form_data.selling_price }}" required>
             </div>
         </div>
 
+        {% if mode == 'edit' %}
         <div class="form-row">
             <div class="form-group">
-                <label for="stock_quantity">Stock quantity</label>
-                <input id="stock_quantity" name="stock_quantity" type="number" min="0" step="1" value="{{ form_data.stock_quantity }}" required>
+                <label for="stock_quantity_display">Устаревший снимок остатка</label>
+                <input id="stock_quantity_display" type="text" value="{{ form_data.stock_quantity }}" readonly>
+                <small>Остатки по филиалам управляются в разделе «Склад».</small>
             </div>
             <div class="form-group">
-                <label for="minimum_stock">Minimum stock</label>
-                <input id="minimum_stock" name="minimum_stock" type="number" min="0" step="1" value="{{ form_data.minimum_stock }}" required>
+                <label for="minimum_stock_display">Устаревший минимальный остаток</label>
+                <input id="minimum_stock_display" type="text" value="{{ form_data.minimum_stock }}" readonly>
+                <small>Минимальный остаток для каждого филиала задаётся в разделе «Склад».</small>
             </div>
         </div>
+        {% else %}
+        <div class="empty-state-box">
+            <p>Товары хранятся в общем каталоге. Добавьте товар в каждый нужный филиал и укажите начальный остаток в разделе «Склад».</p>
+        </div>
+        {% endif %}
 
-        <button type="submit">{{ 'Create Product' if mode == 'create' else 'Save Changes' }}</button>
+        <button type="submit">{{ 'Создать товар' if mode == 'create' else 'Сохранить изменения' }}</button>
     </form>
 </section>
 {% endblock %}

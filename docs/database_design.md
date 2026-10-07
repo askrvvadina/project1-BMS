@@ -11,14 +11,15 @@ The BMS database stores information about users, employees, branches, products, 
 3. branches
 4. categories
 5. products
-6. inventory_transactions
-7. sales
-8. sale_items
-9. customers
-10. shifts
-11. expenses
-12. notifications
-13. audit_logs
+6. branch_inventory
+7. inventory_transactions
+8. sales
+9. sale_items
+10. customers
+11. shifts
+12. expenses
+13. notifications
+14. audit_logs
 
 ## 1. users
 
@@ -80,13 +81,35 @@ Stores information about products.
 | name | String | Not Null | Product name |
 | sku | String | Unique, Not Null | Unique product SKU |
 | category_id | Integer | Foreign Key → categories.id, Not Null | Product category |
-| branch_id | Integer | Foreign Key → branches.id, Not Null | Branch where the product is stored |
+| branch_id | Integer | Foreign Key → branches.id, Not Null | Legacy branch assignment retained during the inventory refactor |
 | purchase_price | Decimal | Not Null | Product purchase price |
 | selling_price | Decimal | Not Null | Product selling price |
-| stock_quantity | Integer | Not Null | Current stock quantity |
-| minimum_stock | Integer | Not Null | Minimum desired stock level |
+| stock_quantity | Integer | Not Null | Legacy stock snapshot retained during the inventory refactor |
+| minimum_stock | Integer | Not Null | Legacy minimum-stock snapshot retained during the inventory refactor |
 
-## 6. inventory_transactions
+## 6. branch_inventory
+
+Stores each product's stock and minimum-stock threshold for a branch.
+
+| Field | Type | Constraints | Description |
+|---|---|---|---|
+| id | Integer | Primary Key | Unique branch inventory identifier |
+| branch_id | Integer | Foreign Key → branches.id, Not Null | Branch holding the product |
+| product_id | Integer | Foreign Key → products.id, Not Null | Product in the branch |
+| stock_quantity | Integer | Not Null, Default 0 | Current stock at this branch |
+| minimum_stock | Integer | Not Null, Default 0 | Minimum desired stock at this branch |
+
+The database enforces a unique `(branch_id, product_id)` pair. During this
+compatibility phase, each product's current legacy branch and stock values are
+copied into one branch inventory row; the legacy Product columns remain.
+Existing inventory movements are associated with the row for the product's
+current legacy branch. The old schema does not prove whether that branch was
+also the product's branch when each historical movement occurred.
+Active inventory management now reads and updates `branch_inventory`; the
+legacy stock and minimum-stock values on `products` are retained for
+compatibility and are not synchronized with later branch movements.
+
+## 7. inventory_transactions
 
 Stores the history of product stock movements.
 
@@ -94,11 +117,12 @@ Stores the history of product stock movements.
 |---|---|---|---|
 | id | Integer | Primary Key | Unique inventory transaction identifier |
 | product_id | Integer | Foreign Key → products.id, Not Null | Product affected by the transaction |
+| branch_inventory_id | Integer | Foreign Key → branch_inventory.id, Nullable | Branch inventory associated with the movement; nullable for compatibility |
 | transaction_type | String | Not Null | Transaction type: stock_in or write_off |
 | quantity | Integer | Not Null | Quantity of products moved |
 | created_at | DateTime | Not Null | Date and time of the transaction |
 
-## 7. customers
+## 8. customers
 
 Stores customer information.
 
@@ -110,7 +134,7 @@ Stores customer information.
 | email | String | | Customer email address |
 | registration_date | Date | Not Null | Customer registration date |    
 
-## 8. sales
+## 9. sales
 
 Stores completed sales.
 
@@ -124,7 +148,7 @@ Stores completed sales.
 | payment_method | String | Not Null | Payment method used for the sale |
 | created_at | DateTime | Not Null | Date and time of the sale |
 
-## 9. sale_items
+## 10. sale_items
 
 Stores individual products included in a sale.
 
@@ -136,7 +160,7 @@ Stores individual products included in a sale.
 | quantity | Integer | Not Null | Quantity sold |
 | unit_price | Decimal | Not Null | Product selling price at the time of sale |
 
-## 10. shifts
+## 11. shifts
 
 Stores employee work shifts.
 
@@ -149,7 +173,7 @@ Stores employee work shifts.
 | end_time | Time | Not Null | Shift end time |
 | status | String | Not Null | Shift status: scheduled, completed, or cancelled |
 
-## 11. expenses
+## 12. expenses
 
 Stores business expense records.
 
@@ -162,7 +186,7 @@ Stores business expense records.
 | description | String | | Expense description |
 | date | Date | Not Null | Expense date |
 
-## 12. notifications
+## 13. notifications
 
 Stores important system notifications.
 
@@ -174,7 +198,7 @@ Stores important system notifications.
 | is_read | Boolean | Not Null | Indicates whether the notification has been read |
 | created_at | DateTime | Not Null | Notification creation date and time |
 
-## 13. audit_logs
+## 14. audit_logs
 
 Stores important actions performed in the system.
 
@@ -202,6 +226,7 @@ branches
   1
   ├──────────── N employees
   ├──────────── N products
+  ├──────────── N branch_inventory
   ├──────────── N sales
   └──────────── N expenses
 
@@ -223,9 +248,15 @@ customers
 
 products
   1
+  ├──────────── N branch_inventory
   ├──────────── N inventory_transactions
   │
   └──────────── N sale_items
+
+
+branch_inventory
+  1
+  └──────────── N inventory_transactions
 
 
 sales

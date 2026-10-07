@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% set page_title = 'Create Category' if mode == 'create' else 'Edit Category' %}
+{% set page_title = 'Создать категорию' if mode == 'create' else 'Редактировать категорию' %}
 {% block title %}{{ page_title }}{% endblock %}
 {% block page_title %}{{ page_title }}{% endblock %}
 
@@ -8,16 +8,16 @@
 <section class="panel-card form-panel">
     <div class="panel-header split-header">
         <h3>{{ page_title }}</h3>
-        <a class="text-btn" href="{{ url_for('categories') }}">Back to categories</a>
+        <a class="text-btn" href="{{ url_for('categories') }}">Назад к категориям</a>
     </div>
 
     <form class="auth-form" method="POST" action="{{ url_for('category_create') if mode == 'create' else url_for('category_edit', category_id=category.id) }}">
         <div class="form-group">
-            <label for="name">Category name</label>
+            <label for="name">Название категории</label>
             <input id="name" name="name" type="text" value="{{ category_name }}" maxlength="100" required>
         </div>
 
-        <button type="submit">{{ 'Create Category' if mode == 'create' else 'Save Changes' }}</button>
+        <button type="submit">{{ 'Создать категорию' if mode == 'create' else 'Сохранить изменения' }}</button>
     </form>
 </section>
 {% endblock %}

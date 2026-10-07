@@ -1,67 +1,67 @@
 {% extends "base.html" %}
 
-{% set page_title = 'Create Employee' if mode == 'create' else 'Edit Employee' %}
+{% set page_title = 'Создать сотрудника' if mode == 'create' else 'Редактировать сотрудника' %}
 {% block title %}{{ page_title }}{% endblock %}
 {% block page_title %}{{ page_title }}{% endblock %}
 
 {% block content %}
 <section class="panel-card form-panel">
     <div class="panel-header split-header">
-        <h3>{{ 'Create Employee' if mode == 'create' else 'Edit Employee' }}</h3>
-        <a class="text-btn" href="{{ url_for('employees') }}">Back to employees</a>
+        <h3>{{ page_title }}</h3>
+        <a class="text-btn" href="{{ url_for('employees') }}">Назад к сотрудникам</a>
     </div>
 
     <form class="auth-form" method="POST" action="{{ url_for('employee_create') if mode == 'create' else url_for('employee_edit', employee_id=employee_id) }}">
         <div class="form-row">
             <div class="form-group">
-                <label for="full_name">Full name</label>
+                <label for="full_name">ФИО</label>
                 <input id="full_name" name="full_name" type="text" value="{{ employee.full_name if employee else '' }}" required>
             </div>
 
             <div class="form-group">
-                <label for="position">Position</label>
+                <label for="position">Должность</label>
                 <input id="position" name="position" type="text" value="{{ employee.position if employee else '' }}" required>
             </div>
         </div>
 
         <div class="form-row">
             <div class="form-group">
-                <label for="phone">Phone</label>
-                <input id="phone" name="phone" type="text" value="{{ employee.phone if employee and employee.phone else '' }}" placeholder="Optional">
+                <label for="phone">Телефон</label>
+                <input id="phone" name="phone" type="text" value="{{ employee.phone if employee and employee.phone else '' }}" placeholder="Необязательно">
             </div>
 
             <div class="form-group">
-                <label for="email">Email</label>
-                <input id="email" name="email" type="email" value="{{ employee.email if employee and employee.email else '' }}" placeholder="Optional">
+                <label for="email">Электронная почта</label>
+                <input id="email" name="email" type="email" value="{{ employee.email if employee and employee.email else '' }}" placeholder="Необязательно">
             </div>
         </div>
 
         <div class="form-row">
             <div class="form-group">
-                <label for="hire_date">Hire date</label>
+                <label for="hire_date">Дата приёма</label>
                 <input id="hire_date" name="hire_date" type="date" value="{{ employee.hire_date if employee and employee.hire_date else '' }}" required>
             </div>
 
             <div class="form-group">
-                <label for="status">Status</label>
+                <label for="status">Статус</label>
                 <select id="status" name="status" required>
-                    <option value="active" {{ 'selected' if employee and employee.status == 'active' else '' }}>Active</option>
-                    <option value="inactive" {{ 'selected' if employee and employee.status == 'inactive' else '' }}>Inactive</option>
+                    <option value="active" {{ 'selected' if employee and employee.status == 'active' else '' }}>Активен</option>
+                    <option value="inactive" {{ 'selected' if employee and employee.status == 'inactive' else '' }}>Неактивен</option>
                 </select>
             </div>
         </div>
 
         <div class="form-group">
-            <label for="branch_id">Branch</label>
+            <label for="branch_id">Филиал</label>
             <select id="branch_id" name="branch_id" required>
-                <option value="">Select a branch</option>
+                <option value="">Выберите филиал</option>
                 {% for branch in branches %}
                 <option value="{{ branch.id }}" {{ 'selected' if employee and employee.branch_id|int == branch.id else '' }}>{{ branch.name }}</option>
                 {% endfor %}
             </select>
         </div>
 
-        <button type="submit">{{ 'Create Employee' if mode == 'create' else 'Save Changes' }}</button>
+        <button type="submit">{{ 'Создать сотрудника' if mode == 'create' else 'Сохранить изменения' }}</button>
     </form>
 </section>
 {% endblock %}

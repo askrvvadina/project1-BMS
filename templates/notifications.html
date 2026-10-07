@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Уведомления | BMS{% endblock %}
+{% block page_title %}Уведомления{% endblock %}
+
+{% block content %}
+<section class="panel-card notifications-panel">
+    <div class="panel-header split-header">
+        <div>
+            <h3>Ваши уведомления</h3>
+            <p class="notification-intro">Обновления для вашей учётной записи.</p>
+        </div>
+        {% if notifications %}
+        <form method="POST" action="{{ url_for('notifications_mark_all_read') }}">
+            <button class="secondary-btn" type="submit">Отметить все как прочитанные</button>
+        </form>
+        {% endif %}
+    </div>
+
+    {% if notifications %}
+    <div class="notification-list">
+        {% for notification in notifications %}
+        <article class="notification-card {{ 'unread' if not notification.is_read else 'read' }}">
+            <div class="notification-content">
+                <div class="notification-heading">
+                    <span class="notification-state">{{ 'Не прочитано' if not notification.is_read else 'Прочитано' }}</span>
+                    <time datetime="{{ notification.created_at.isoformat() }}">
+                        {{ notification.created_at.strftime('%d.%m.%Y, %H:%M') }}
+                    </time>
+                </div>
+                {% set localized_message = notification.message
+                    |replace('Resolved: ', 'Устранено: ')
+                    |replace('Low stock alert [BranchInventory #', 'Предупреждение о низком остатке (позиция склада №')
+                    |replace('Low stock alert [Product #', 'Предупреждение о низком остатке (товар №')
+                    |replace(']: Product: ', '): Товар: ')
+                    |replace('; SKU: ', '; Артикул: ')
+                    |replace('; Branch: ', '; Филиал: ')
+                    |replace('; Current stock: ', '; Текущий остаток: ') %}
+                <p>{{ localized_message }}</p>
+            </div>
+            {% if not notification.is_read %}
+            <form method="POST" action="{{ url_for('notification_mark_read', notification_id=notification.id) }}">
+                <button class="text-btn notification-read-action" type="submit">Отметить как прочитанное</button>
+            </form>
+            {% endif %}
+        </article>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state-box">
+        <p>У вас пока нет уведомлений.</p>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

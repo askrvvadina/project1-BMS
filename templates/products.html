@@ -1,27 +1,27 @@
 {% extends "base.html" %}
 
-{% block title %}Products{% endblock %}
-{% block page_title %}Products{% endblock %}
+{% block title %}Товары{% endblock %}
+{% block page_title %}Товары{% endblock %}
 
 {% block content %}
 <section class="panel-card products-panel">
     <div class="panel-header split-header">
-        <h3>Product Directory</h3>
+        <h3>Каталог товаров</h3>
         {% if (session.get('role') or '').lower() in ['admin', 'manager'] %}
-        <a class="primary-btn" href="{{ url_for('product_create') }}">Add Product</a>
+        <a class="primary-btn" href="{{ url_for('product_create') }}">Добавить товар</a>
         {% endif %}
     </div>
 
     <form class="employee-toolbar" method="GET" action="{{ url_for('products') }}">
         <div class="toolbar-field search-field">
-            <label for="product-search">Search</label>
-            <input id="product-search" name="q" type="search" value="{{ search_query }}" placeholder="Product name or SKU">
+            <label for="product-search">Поиск</label>
+            <input id="product-search" name="q" type="search" value="{{ search_query }}" placeholder="Название товара или артикул">
         </div>
 
         <div class="toolbar-field">
-            <label for="category-filter">Category</label>
+            <label for="category-filter">Категория</label>
             <select id="category-filter" name="category_id">
-                <option value="">All categories</option>
+                <option value="">Все категории</option>
                 {% for category in categories %}
                 <option value="{{ category.id }}" {{ 'selected' if category_filter == category.id|string else '' }}>{{ category.name }}</option>
                 {% endfor %}
@@ -29,9 +29,9 @@
         </div>
 
         <div class="toolbar-field">
-            <label for="branch-filter">Branch</label>
+            <label for="branch-filter">Филиал</label>
             <select id="branch-filter" name="branch_id">
-                <option value="">All branches</option>
+                <option value="">Все филиалы</option>
                 {% for branch in branches %}
                 <option value="{{ branch.id }}" {{ 'selected' if branch_filter == branch.id|string else '' }}>{{ branch.name }}</option>
                 {% endfor %}
@@ -39,20 +39,20 @@
         </div>
 
         <div class="toolbar-field">
-            <label for="sort-filter">Sort by</label>
+            <label for="sort-filter">Сортировка</label>
             <select id="sort-filter" name="sort">
-                <option value="name_asc" {{ 'selected' if active_sort == 'name_asc' else '' }}>Name A-Z</option>
-                <option value="name_desc" {{ 'selected' if active_sort == 'name_desc' else '' }}>Name Z-A</option>
-                <option value="price_low" {{ 'selected' if active_sort == 'price_low' else '' }}>Selling price: low-high</option>
-                <option value="price_high" {{ 'selected' if active_sort == 'price_high' else '' }}>Selling price: high-low</option>
-                <option value="stock_low" {{ 'selected' if active_sort == 'stock_low' else '' }}>Stock: low-high</option>
-                <option value="stock_high" {{ 'selected' if active_sort == 'stock_high' else '' }}>Stock: high-low</option>
+                <option value="name_asc" {{ 'selected' if active_sort == 'name_asc' else '' }}>Название: А–Я</option>
+                <option value="name_desc" {{ 'selected' if active_sort == 'name_desc' else '' }}>Название: Я–А</option>
+                <option value="price_low" {{ 'selected' if active_sort == 'price_low' else '' }}>Цена: по возрастанию</option>
+                <option value="price_high" {{ 'selected' if active_sort == 'price_high' else '' }}>Цена: по убыванию</option>
+                <option value="stock_low" {{ 'selected' if active_sort == 'stock_low' else '' }}>Остаток: по возрастанию</option>
+                <option value="stock_high" {{ 'selected' if active_sort == 'stock_high' else '' }}>Остаток: по убыванию</option>
             </select>
         </div>
 
         <div class="toolbar-actions">
-            <button class="primary-btn" type="submit">Apply</button>
-            <a class="text-btn" href="{{ url_for('products') }}">Clear</a>
+            <button class="primary-btn" type="submit">Применить</button>
+            <a class="text-btn" href="{{ url_for('products') }}">Сбросить</a>
         </div>
     </form>
 
@@ -61,14 +61,14 @@
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>Name</th>
-                    <th>SKU</th>
-                    <th>Category</th>
-                    <th>Branch</th>
-                    <th>Selling Price</th>
-                    <th>Stock</th>
-                    <th>Status</th>
-                    <th>Actions</th>
+                    <th>Название</th>
+                    <th>Артикул</th>
+                    <th>Категория</th>
+                    <th>Филиал</th>
+                    <th>Цена продажи</th>
+                    <th>Остаток</th>
+                    <th>Статус</th>
+                    <th>Действия</th>
                 </tr>
             </thead>
             <tbody>
@@ -82,17 +82,17 @@
                     <td>{{ '%.2f'|format(product.selling_price) }}</td>
                     <td>{{ product.stock_quantity }}</td>
                     <td>
-                        <span class="status-badge {{ 'inactive' if low_stock else 'active' }}">
-                            {{ 'Low Stock' if low_stock else 'In Stock' }}
+                        <span class="status-badge {{ 'low-stock' if low_stock else 'active' }}">
+                            {{ 'Мало на складе' if low_stock else 'В наличии' }}
                         </span>
                     </td>
                     <td>
                         <div class="row-actions">
-                            <a class="table-link" href="{{ url_for('product_detail', product_id=product.id) }}">View</a>
+                            <a class="table-link" href="{{ url_for('product_detail', product_id=product.id) }}">Просмотр</a>
                             {% if (session.get('role') or '').lower() in ['admin', 'manager'] %}
-                            <a class="table-link" href="{{ url_for('product_edit', product_id=product.id) }}">Edit</a>
-                            <form method="POST" action="{{ url_for('product_delete', product_id=product.id) }}" onsubmit="return confirm('Delete this product?');">
-                                <button class="danger-btn" type="submit">Delete</button>
+                            <a class="table-link" href="{{ url_for('product_edit', product_id=product.id) }}">Редактировать</a>
+                            <form method="POST" action="{{ url_for('product_delete', product_id=product.id) }}" onsubmit="return confirm('Удалить этот товар?');">
+                                <button class="danger-btn" type="submit">Удалить</button>
                             </form>
                             {% endif %}
                         </div>
@@ -105,8 +105,7 @@
     {% else %}
     <div class="empty-state-box">
         <div>
-            <div class="placeholder-icon" aria-hidden="true">📦</div>
-            <p>No products match the current filters.</p>
+            <p>Товары по заданным фильтрам не найдены.</p>
         </div>
     </div>
     {% endif %}

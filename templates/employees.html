@@ -1,25 +1,25 @@
 {% extends "base.html" %}
 
-{% block title %}Employees{% endblock %}
-{% block page_title %}Employees{% endblock %}
+{% block title %}Сотрудники{% endblock %}
+{% block page_title %}Сотрудники{% endblock %}
 
 {% block content %}
 <section class="panel-card employees-panel">
     <div class="panel-header split-header">
-        <h3>Employee Directory</h3>
-        <a class="primary-btn" href="{{ url_for('employee_create') }}">Add Employee</a>
+        <h3>Список сотрудников</h3>
+        <a class="primary-btn" href="{{ url_for('employee_create') }}">Добавить сотрудника</a>
     </div>
 
     <form class="employee-toolbar" method="GET" action="{{ url_for('employees') }}">
         <div class="toolbar-field search-field">
-            <label for="employee-search">Search</label>
-            <input id="employee-search" name="q" type="search" value="{{ search_query }}" placeholder="Name, title, email...">
+            <label for="employee-search">Поиск</label>
+            <input id="employee-search" name="q" type="search" value="{{ search_query }}" placeholder="Имя, должность, почта...">
         </div>
 
         <div class="toolbar-field">
-            <label for="branch-filter">Branch</label>
+            <label for="branch-filter">Филиал</label>
             <select id="branch-filter" name="branch_id">
-                <option value="">All branches</option>
+                <option value="">Все филиалы</option>
                 {% for branch in branches %}
                 <option value="{{ branch.id }}" {{ 'selected' if active_branch and active_branch|int == branch.id else '' }}>{{ branch.name }}</option>
                 {% endfor %}
@@ -27,27 +27,27 @@
         </div>
 
         <div class="toolbar-field">
-            <label for="status-filter">Status</label>
+            <label for="status-filter">Статус</label>
             <select id="status-filter" name="status">
-                <option value="">All statuses</option>
-                <option value="active" {{ 'selected' if active_status == 'active' else '' }}>Active</option>
-                <option value="inactive" {{ 'selected' if active_status == 'inactive' else '' }}>Inactive</option>
+                <option value="">Все статусы</option>
+                <option value="active" {{ 'selected' if active_status == 'active' else '' }}>Активен</option>
+                <option value="inactive" {{ 'selected' if active_status == 'inactive' else '' }}>Неактивен</option>
             </select>
         </div>
 
         <div class="toolbar-field">
-            <label for="sort-filter">Sort by</label>
+            <label for="sort-filter">Сортировка</label>
             <select id="sort-filter" name="sort">
-                <option value="hire_newest" {{ 'selected' if active_sort == 'hire_newest' or not active_sort else '' }}>Newest hire</option>
-                <option value="hire_oldest" {{ 'selected' if active_sort == 'hire_oldest' else '' }}>Oldest hire</option>
-                <option value="name_asc" {{ 'selected' if active_sort == 'name_asc' else '' }}>Name A-Z</option>
-                <option value="name_desc" {{ 'selected' if active_sort == 'name_desc' else '' }}>Name Z-A</option>
+                <option value="hire_newest" {{ 'selected' if active_sort == 'hire_newest' or not active_sort else '' }}>Сначала новые сотрудники</option>
+                <option value="hire_oldest" {{ 'selected' if active_sort == 'hire_oldest' else '' }}>Сначала давно принятые</option>
+                <option value="name_asc" {{ 'selected' if active_sort == 'name_asc' else '' }}>Имя: А–Я</option>
+                <option value="name_desc" {{ 'selected' if active_sort == 'name_desc' else '' }}>Имя: Я–А</option>
             </select>
         </div>
 
         <div class="toolbar-actions">
-            <button class="primary-btn" type="submit">Apply</button>
-            <a class="text-btn" href="{{ url_for('employees') }}">Clear</a>
+            <button class="primary-btn" type="submit">Применить</button>
+            <a class="text-btn" href="{{ url_for('employees') }}">Сбросить</a>
         </div>
     </form>
 
@@ -56,13 +56,13 @@
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>Name</th>
-                    <th>Position</th>
-                    <th>Branch</th>
-                    <th>Email</th>
-                    <th>Hire Date</th>
-                    <th>Status</th>
-                    <th>Actions</th>
+                    <th>Имя</th>
+                    <th>Должность</th>
+                    <th>Филиал</th>
+                    <th>Электронная почта</th>
+                    <th>Дата приёма</th>
+                    <th>Статус</th>
+                    <th>Действия</th>
                 </tr>
             </thead>
             <tbody>
@@ -73,18 +73,18 @@
                     <td>{{ employee.position }}</td>
                     <td>{{ row.branch_name }}</td>
                     <td>{{ employee.email or '—' }}</td>
-                    <td>{{ employee.hire_date.strftime('%d %b %Y') if employee.hire_date else '—' }}</td>
+                    <td>{{ employee.hire_date.strftime('%d.%m.%Y') if employee.hire_date else '—' }}</td>
                     <td>
                         <span class="status-badge {{ 'active' if employee.status == 'active' else 'inactive' }}">
-                            {{ 'Active' if employee.status == 'active' else 'Inactive' }}
+                            {{ 'Активен' if employee.status == 'active' else 'Неактивен' }}
                         </span>
                     </td>
                     <td>
                         <div class="row-actions">
-                            <a class="table-link" href="{{ url_for('employee_detail', employee_id=employee.id) }}">View</a>
-                            <a class="table-link" href="{{ url_for('employee_edit', employee_id=employee.id) }}">Edit</a>
-                            <form method="POST" action="{{ url_for('employee_delete', employee_id=employee.id) }}" onsubmit="return confirm('Delete this employee?');">
-                                <button class="danger-btn" type="submit">Delete</button>
+                            <a class="table-link" href="{{ url_for('employee_detail', employee_id=employee.id) }}">Просмотр</a>
+                            <a class="table-link" href="{{ url_for('employee_edit', employee_id=employee.id) }}">Редактировать</a>
+                            <form method="POST" action="{{ url_for('employee_delete', employee_id=employee.id) }}" onsubmit="return confirm('Удалить этого сотрудника?');">
+                                <button class="danger-btn" type="submit">Удалить</button>
                             </form>
                         </div>
                     </td>
@@ -96,8 +96,7 @@
     {% else %}
     <div class="empty-state-box">
         <div>
-            <div class="placeholder-icon">👤</div>
-            <p>No employees match the current filters.</p>
+            <p>Сотрудники по заданным фильтрам не найдены.</p>
         </div>
     </div>
     {% endif %}

@@ -22,6 +22,7 @@ class Branch(db.Model):
     address = db.Column(db.String(255), nullable=False)
     phone = db.Column(db.String(30))
     status = db.Column(db.String(20), nullable=False, default="active")
+    inventory_items = db.relationship("BranchInventory", back_populates="branch")
 
 
 class Employee(db.Model):
@@ -71,6 +72,52 @@ class Product(db.Model):
     selling_price = db.Column(db.Numeric(10, 2), nullable=False)
     stock_quantity = db.Column(db.Integer, nullable=False, default=0)
     minimum_stock = db.Column(db.Integer, nullable=False, default=0)
+    branch_inventories = db.relationship(
+        "BranchInventory",
+        back_populates="product",
+    )
+
+
+class BranchInventory(db.Model):
+    __tablename__ = "branch_inventory"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "branch_id",
+            "product_id",
+            name="uq_branch_inventory_branch_product",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    branch_id = db.Column(
+        db.Integer,
+        db.ForeignKey("branches.id"),
+        nullable=False,
+    )
+    product_id = db.Column(
+        db.Integer,
+        db.ForeignKey("products.id"),
+        nullable=False,
+    )
+    stock_quantity = db.Column(
+        db.Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    minimum_stock = db.Column(
+        db.Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+
+    branch = db.relationship("Branch", back_populates="inventory_items")
+    product = db.relationship("Product", back_populates="branch_inventories")
+    transactions = db.relationship(
+        "InventoryTransaction",
+        back_populates="branch_inventory",
+    )
 
 
 class InventoryTransaction(db.Model):
@@ -84,9 +131,18 @@ class InventoryTransaction(db.Model):
         nullable=False
     )
 
+    branch_inventory_id = db.Column(
+        db.Integer,
+        db.ForeignKey("branch_inventory.id"),
+        nullable=True,
+    )
     transaction_type = db.Column(db.String(20), nullable=False)
     quantity = db.Column(db.Integer, nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    branch_inventory = db.relationship(
+        "BranchInventory",
+        back_populates="transactions",
+    )
 
 
 class Customer(db.Model):

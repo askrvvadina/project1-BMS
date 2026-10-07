@@ -1,75 +1,72 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard | BMS{% endblock %}
-{% block page_title %}Dashboard{% endblock %}
+{% block title %}Главная | BMS{% endblock %}
+{% block page_title %}Главная{% endblock %}
 
 {% block content %}
 <section class="welcome-panel">
     <div>
-        <p class="eyebrow">Welcome back</p>
-        <h2>Business Overview</h2>
+        <p class="eyebrow">С возвращением</p>
+        <h2>Обзор бизнеса</h2>
+        <p class="welcome-copy">Ключевая информация о вашем бизнесе.</p>
     </div>
-    <button class="primary-btn" type="button">Generate Report</button>
+    <button class="primary-btn" type="button">Сформировать отчёт</button>
 </section>
 
-<section class="stats-grid" aria-label="Business summary">
+<section class="stats-grid" aria-label="Сводка по бизнесу">
     <article class="stat-card revenue">
         <div class="stat-header">
-            <span class="stat-label">Revenue</span>
-            <span class="stat-icon" aria-hidden="true">↗</span>
+            <span class="stat-label">Выручка</span>
         </div>
         <h3>$0</h3>
-        <p>vs. last month</p>
+        <p>по сравнению с прошлым месяцем</p>
     </article>
 
     <article class="stat-card sales">
         <div class="stat-header">
-            <span class="stat-label">Sales</span>
-            <span class="stat-icon" aria-hidden="true">◌</span>
+            <span class="stat-label">Продажи</span>
         </div>
-        <h3>0 sales</h3>
-        <p>Orders this period</p>
+        <h3>0 продаж</h3>
+        <p>Заказы за этот период</p>
     </article>
 
     <article class="stat-card products">
         <div class="stat-header">
-            <span class="stat-label">Products</span>
-            <span class="stat-icon" aria-hidden="true">▣</span>
+            <span class="stat-label">Товары</span>
         </div>
         <h3>0</h3>
-        <p>Items in catalog</p>
+        <p>Товаров в каталоге</p>
     </article>
 
     <article class="stat-card employees">
         <div class="stat-header">
-            <span class="stat-label">Employees</span>
-            <span class="stat-icon" aria-hidden="true">☰</span>
+            <span class="stat-label">Сотрудники</span>
         </div>
         <h3>0</h3>
-        <p>Active staff</p>
+        <p>Активные сотрудники</p>
     </article>
 </section>
 
 <section class="content-grid">
     <article class="panel-card activity-panel">
         <div class="panel-header">
-            <h3>Recent Activity</h3>
-            <button class="text-btn" type="button">View all</button>
+            <h3>Последние действия</h3>
+            <button class="text-btn" type="button">Показать все</button>
         </div>
 
         <div class="empty-state-box">
-            <p>No recent activity yet.</p>
+            <p>Пока нет недавних действий.</p>
         </div>
     </article>
 
     <article class="panel-card stock-panel">
         <div class="panel-header">
-            <h3>Low Stock</h3>
-            <button class="text-btn" type="button">Review</button>
+            <h3>Мало на складе</h3>
+            <button class="text-btn" type="button">Проверить</button>
         </div>
 
         <div class="empty-state-box">
-            <p>No low-stock products to display.</p>
+            <p>Нет товаров с низким остатком.</p>
         </div>
     </article>
 </section>

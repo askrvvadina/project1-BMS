@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block title %}{{ employee.full_name }}{% endblock %}
-{% block page_title %}Employee Detail{% endblock %}
+{% block page_title %}Сведения о сотруднике{% endblock %}
 
 {% block content %}
 <section class="branch-detail-grid">
@@ -9,58 +9,58 @@
         <div class="profile-header">
             <div class="profile-avatar">{{ employee.full_name[:2]|upper }}</div>
             <div>
-                <p class="eyebrow">Employee</p>
+                <p class="eyebrow">Сотрудник</p>
                 <h2>{{ employee.full_name }}</h2>
             </div>
         </div>
 
         <div class="profile-details">
             <div class="detail-row">
-                <span>Position</span>
+                <span>Должность</span>
                 <strong>{{ employee.position }}</strong>
             </div>
             <div class="detail-row">
-                <span>Branch</span>
-                <strong>{{ branch.name if branch else 'Unknown branch' }}</strong>
+                <span>Филиал</span>
+                <strong>{{ branch.name if branch else 'Неизвестный филиал' }}</strong>
             </div>
             <div class="detail-row">
-                <span>Status</span>
+                <span>Статус</span>
                 <strong>
                     <span class="status-badge {{ 'active' if employee.status == 'active' else 'inactive' }}">
-                        {{ 'Active' if employee.status == 'active' else 'Inactive' }}
+                        {{ 'Активен' if employee.status == 'active' else 'Неактивен' }}
                     </span>
                 </strong>
             </div>
             <div class="detail-row">
-                <span>Hire date</span>
-                <strong>{{ employee.hire_date.strftime('%d %b %Y') if employee.hire_date else '—' }}</strong>
+                <span>Дата приёма</span>
+                <strong>{{ employee.hire_date.strftime('%d.%m.%Y') if employee.hire_date else '—' }}</strong>
             </div>
         </div>
     </div>
 
     <div class="panel-card">
         <div class="panel-header split-header">
-            <h3>Contact & Details</h3>
-            <a class="text-btn" href="{{ url_for('employees') }}">Back to employees</a>
+            <h3>Контактные данные</h3>
+            <a class="text-btn" href="{{ url_for('employees') }}">Назад к сотрудникам</a>
         </div>
 
         <div class="profile-details">
             <div class="detail-row">
-                <span>Phone</span>
+                <span>Телефон</span>
                 <strong>{{ employee.phone or '—' }}</strong>
             </div>
             <div class="detail-row">
-                <span>Email</span>
+                <span>Электронная почта</span>
                 <strong>{{ employee.email or '—' }}</strong>
             </div>
             <div class="detail-row">
-                <span>Employee ID</span>
+                <span>Идентификатор сотрудника</span>
                 <strong>#{{ employee.id }}</strong>
             </div>
         </div>
 
         <div class="status-action">
-            <a class="primary-btn" href="{{ url_for('employee_edit', employee_id=employee.id) }}">Edit Employee</a>
+            <a class="primary-btn" href="{{ url_for('employee_edit', employee_id=employee.id) }}">Редактировать сотрудника</a>
         </div>
     </div>
 </section>

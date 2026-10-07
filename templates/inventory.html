@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+
+{% block title %}Склад | BMS{% endblock %}
+{% block page_title %}Склад{% endblock %}
+
+{% block content %}
+{% if selected_branch %}
+<section class="panel-card inventory-branch-panel">
+    <div class="panel-header split-header">
+        <div>
+            <h3>Склад филиала</h3>
+            <p>Управляйте остатками отдельно для каждого филиала.</p>
+        </div>
+        <form class="inventory-branch-filter" method="GET" action="{{ url_for('inventory') }}">
+            <label for="branch_id">Филиал</label>
+            <select id="branch_id" name="branch_id" required>
+                {% for branch in branches %}
+                <option value="{{ branch.id }}" {{ 'selected' if branch.id == selected_branch.id else '' }}>
+                    {{ branch.name }}
+                </option>
+                {% endfor %}
+            </select>
+            <button class="secondary-btn" type="submit">Показать</button>
+        </form>
+    </div>
+    <div class="inventory-selected-branch">
+        <span>Сейчас выбран филиал:</span>
+        <strong>{{ selected_branch.name }}</strong>
+    </div>
+</section>
+
+<div class="form-row inventory-action-grid">
+    <section class="panel-card inventory-movement-panel">
+        <div class="panel-header">
+            <h3>Операция с остатком</h3>
+        </div>
+        {% if branch_inventory_rows %}
+        <form class="auth-form" method="POST" action="{{ url_for('inventory') }}">
+            <input type="hidden" name="action" value="movement">
+            <input type="hidden" name="branch_id" value="{{ selected_branch.id }}">
+            <div class="form-group">
+                <label for="movement_product_id">Товар</label>
+                <select id="movement_product_id" name="product_id" required>
+                    <option value="">Выберите товар</option>
+                    {% for item in branch_inventory_rows %}
+                    <option value="{{ item.product_id }}">
+                        {{ item.product.name }} ({{ item.product.sku }}) — Остаток: {{ item.stock_quantity }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="transaction_type">Тип операции</label>
+                    <select id="transaction_type" name="transaction_type" required>
+                        <option value="">Выберите операцию</option>
+                        <option value="stock_in">Поступление</option>
+                        <option value="write_off">Списание</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="quantity">Количество</label>
+                    <input id="quantity" name="quantity" type="number" min="1" step="1" required>
+                </div>
+            </div>
+            <button class="primary-btn" type="submit">Выполнить операцию</button>
+        </form>
+        {% else %}
+        <div class="empty-state-box">
+            <p>Сначала добавьте товар в этот филиал.</p>
+        </div>
+        {% endif %}
+    </section>
+
+    <section class="panel-card inventory-assignment-panel">
+        <div class="panel-header">
+            <h3>Добавить товар в филиал</h3>
+        </div>
+        {% if available_products %}
+        <form class="auth-form" method="POST" action="{{ url_for('inventory') }}">
+            <input type="hidden" name="action" value="assign">
+            <input type="hidden" name="branch_id" value="{{ selected_branch.id }}">
+            <div class="form-group">
+                <label for="assignment_product_id">Товар из каталога</label>
+                <select id="assignment_product_id" name="product_id" required>
+                    <option value="">Выберите товар</option>
+                    {% for product in available_products %}
+                    <option value="{{ product.id }}">{{ product.name }} ({{ product.sku }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="initial_stock">Начальный остаток</label>
+                    <input id="initial_stock" name="initial_stock" type="number" min="0" step="1" value="0" required>
+                </div>
+                <div class="form-group">
+                    <label for="minimum_stock">Минимальный остаток</label>
+                    <input id="minimum_stock" name="minimum_stock" type="number" min="0" step="1" value="0" required>
+                </div>
+            </div>
+            <button class="primary-btn" type="submit">Добавить товар</button>
+        </form>
+        {% else %}
+        <div class="empty-state-box">
+            <p>Все товары каталога уже добавлены в этот филиал.</p>
+        </div>
+        {% endif %}
+    </section>
+</div>
+
+<section class="panel-card inventory-stock-panel">
+    <div class="panel-header">
+        <h3>Текущие остатки — {{ selected_branch.name }}</h3>
+        <span class="users-count">Товаров: {{ branch_inventory_rows|length }}</span>
+    </div>
+
+    {% if branch_inventory_rows %}
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Товар</th>
+                    <th>Артикул</th>
+                    <th>Текущий остаток</th>
+                    <th>Минимальный остаток</th>
+                    <th>Статус</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in branch_inventory_rows %}
+                {% if item.stock_quantity == 0 %}
+                    {% set stock_status = 'Нет в наличии' %}
+                    {% set stock_class = 'inactive' %}
+                {% elif item.stock_quantity <= item.minimum_stock %}
+                    {% set stock_status = 'Мало на складе' %}
+                    {% set stock_class = 'low-stock' %}
+                {% else %}
+                    {% set stock_status = 'В наличии' %}
+                    {% set stock_class = 'active' %}
+                {% endif %}
+                <tr>
+                    <td>{{ item.product.name }}</td>
+                    <td>{{ item.product.sku }}</td>
+                    <td>{{ item.stock_quantity }}</td>
+                    <td>
+                        <form class="inventory-threshold-form" method="POST" action="{{ url_for('inventory') }}">
+                            <input type="hidden" name="action" value="threshold">
+                            <input type="hidden" name="branch_id" value="{{ selected_branch.id }}">
+                            <input type="hidden" name="product_id" value="{{ item.product_id }}">
+                            <label class="visually-hidden" for="minimum-stock-{{ item.id }}">
+                                Минимальный остаток для товара {{ item.product.name }}
+                            </label>
+                            <input id="minimum-stock-{{ item.id }}" name="minimum_stock" type="number" min="0" step="1" value="{{ item.minimum_stock }}" required>
+                            <button class="secondary-btn" type="submit">Обновить</button>
+                        </form>
+                    </td>
+                    <td><span class="status-badge {{ stock_class }}">{{ stock_status }}</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state-box">
+        <p>В филиале {{ selected_branch.name }} пока нет добавленных товаров.</p>
+    </div>
+    {% endif %}
+</section>
+
+<section class="panel-card inventory-history-panel">
+    <div class="panel-header">
+        <h3>Последние движения товара</h3>
+        <span class="users-count">{{ selected_branch.name }}</span>
+    </div>
+
+    {% if transaction_rows %}
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Дата и время</th>
+                    <th>Филиал</th>
+                    <th>Товар</th>
+                    <th>Артикул</th>
+                    <th>Операция</th>
+                    <th>Количество</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for transaction, product_name, product_sku, branch_name in transaction_rows %}
+                <tr>
+                    <td>{{ transaction.created_at.strftime('%d.%m.%Y, %H:%M') }}</td>
+                    <td>{{ branch_name }}</td>
+                    <td>{{ product_name }}</td>
+                    <td>{{ product_sku }}</td>
+                    <td>{{ 'Поступление' if transaction.transaction_type == 'stock_in' else 'Списание' }}</td>
+                    <td>{{ transaction.quantity }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state-box">
+        <p>Для филиала {{ selected_branch.name }} ещё не зарегистрированы движения товара.</p>
+    </div>
+    {% endif %}
+</section>
+{% endif %}
+{% endblock %}

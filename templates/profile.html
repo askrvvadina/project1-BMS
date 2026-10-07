@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
-{% block title %}Profile{% endblock %}
-{% block page_title %}Profile{% endblock %}
+{% block title %}Профиль{% endblock %}
+{% block page_title %}Профиль{% endblock %}
 
 {% block content %}
 <section class="profile-layout">
@@ -9,49 +9,49 @@
         <div class="profile-header">
             <div class="profile-avatar">{{ user.username[:2]|upper }}</div>
             <div>
-                <p class="eyebrow">Account</p>
+                <p class="eyebrow">Учётная запись</p>
                 <h2>{{ user.username }}</h2>
             </div>
         </div>
 
         <div class="profile-details">
             <div class="detail-row">
-                <span>Email</span>
+                <span>Электронная почта</span>
                 <strong>{{ user.email }}</strong>
             </div>
             <div class="detail-row">
-                <span>Role</span>
-                <strong>{{ user.role|title }}</strong>
+                <span>Роль</span>
+                <strong>{{ {'admin': 'Администратор', 'manager': 'Менеджер', 'employee': 'Сотрудник'}.get(user.role|lower, user.role) }}</strong>
             </div>
             <div class="detail-row">
-                <span>Status</span>
-                <strong>{{ 'Active' if user.is_active else 'Inactive' }}</strong>
+                <span>Статус</span>
+                <strong>{{ 'Активен' if user.is_active else 'Неактивен' }}</strong>
             </div>
         </div>
     </div>
 
     <div class="password-panel panel-card">
         <div class="panel-header">
-            <h3>Change Password</h3>
+            <h3>Сменить пароль</h3>
         </div>
 
         <form class="auth-form" method="POST" action="{{ url_for('profile') }}">
             <div class="form-group">
-                <label for="current_password">Current password</label>
+                <label for="current_password">Текущий пароль</label>
                 <input id="current_password" name="current_password" type="password" autocomplete="current-password" required>
             </div>
 
             <div class="form-group">
-                <label for="new_password">New password</label>
+                <label for="new_password">Новый пароль</label>
                 <input id="new_password" name="new_password" type="password" autocomplete="new-password" minlength="8" required>
             </div>
 
             <div class="form-group">
-                <label for="confirm_new_password">Confirm new password</label>
+                <label for="confirm_new_password">Подтвердите новый пароль</label>
                 <input id="confirm_new_password" name="confirm_new_password" type="password" autocomplete="new-password" minlength="8" required>
             </div>
 
-            <button type="submit">Update password</button>
+            <button type="submit">Обновить пароль</button>
         </form>
     </div>
 </section>

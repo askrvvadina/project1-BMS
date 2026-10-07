@@ -1,41 +1,41 @@
 {% extends "base.html" %}
 
-{% set page_title = 'Create Branch' if mode == 'create' else 'Edit Branch' %}
+{% set page_title = 'Создать филиал' if mode == 'create' else 'Редактировать филиал' %}
 {% block title %}{{ page_title }}{% endblock %}
 {% block page_title %}{{ page_title }}{% endblock %}
 
 {% block content %}
 <section class="panel-card form-panel">
     <div class="panel-header split-header">
-        <h3>{{ 'Create Branch' if mode == 'create' else 'Edit Branch' }}</h3>
-        <a class="text-btn" href="{{ url_for('branches') }}">Back to branches</a>
+        <h3>{{ page_title }}</h3>
+        <a class="text-btn" href="{{ url_for('branches') }}">Назад к филиалам</a>
     </div>
 
     <form class="auth-form" method="POST" action="{{ form_action }}">
         <div class="form-group">
-            <label for="name">Branch name</label>
+            <label for="name">Название филиала</label>
             <input id="name" name="name" type="text" value="{{ branch.name if branch else '' }}" required>
         </div>
 
         <div class="form-group">
-            <label for="address">Address</label>
+            <label for="address">Адрес</label>
             <input id="address" name="address" type="text" value="{{ branch.address if branch else '' }}" required>
         </div>
 
         <div class="form-group">
-            <label for="phone">Phone</label>
-            <input id="phone" name="phone" type="text" value="{{ branch.phone if branch and branch.phone else '' }}" placeholder="Optional">
+            <label for="phone">Телефон</label>
+            <input id="phone" name="phone" type="text" value="{{ branch.phone if branch and branch.phone else '' }}" placeholder="Необязательно">
         </div>
 
         <div class="form-group">
-            <label for="status">Status</label>
+            <label for="status">Статус</label>
             <select id="status" name="status" required>
-                <option value="active" {{ 'selected' if branch and branch.status == 'active' else '' }}>Active</option>
-                <option value="inactive" {{ 'selected' if branch and branch.status == 'inactive' else '' }}>Inactive</option>
+                <option value="active" {{ 'selected' if branch and branch.status == 'active' else '' }}>Активен</option>
+                <option value="inactive" {{ 'selected' if branch and branch.status == 'inactive' else '' }}>Неактивен</option>
             </select>
         </div>
 
-        <button type="submit">{{ 'Create Branch' if mode == 'create' else 'Save Changes' }}</button>
+        <button type="submit">{{ 'Создать филиал' if mode == 'create' else 'Сохранить изменения' }}</button>
     </form>
 </section>
 {% endblock %}

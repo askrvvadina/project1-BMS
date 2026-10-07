@@ -1,45 +1,45 @@
 {% extends "base.html" %}
 
-{% block title %}Login | BMS{% endblock %}
-{% block page_title %}Login{% endblock %}
+{% block title %}Вход | BMS{% endblock %}
+{% block page_title %}Вход{% endblock %}
 
 {% block content %}
 <section class="auth-page">
     <div class="auth-card">
-        <div class="auth-brand" aria-label="Business Management System logo">
+        <div class="auth-brand" aria-label="Логотип системы управления бизнесом">
             <div class="brand-mark">B</div>
             <div class="brand-text">
                 <span class="brand-name">BMS</span>
             </div>
         </div>
 
-        <h2>Welcome back</h2>
-        <p class="auth-subtitle">Sign in to continue to your workspace.</p>
+        <h2>С возвращением</h2>
+        <p class="auth-subtitle">Войдите, чтобы продолжить работу.</p>
 
         <form class="auth-form" action="{{ url_for('login') }}" method="post">
             <div class="form-group">
-                <label for="login-identifier">Email or Username</label>
-                <input id="login-identifier" name="identifier" type="text" placeholder="Enter your email or username" autocomplete="username" required>
+                <label for="login-identifier">Электронная почта или имя пользователя</label>
+                <input id="login-identifier" name="identifier" type="text" placeholder="Введите почту или имя пользователя" autocomplete="username" required>
             </div>
 
             <div class="form-group">
-                <label for="login-password">Password</label>
-                <input id="login-password" name="password" type="password" placeholder="Enter your password" autocomplete="current-password" required>
+                <label for="login-password">Пароль</label>
+                <input id="login-password" name="password" type="password" placeholder="Введите пароль" autocomplete="current-password" required>
             </div>
 
             <div class="checkbox-row">
                 <label class="checkbox-wrap" for="remember-me">
                     <input id="remember-me" name="remember" type="checkbox">
-                    <span>Remember me</span>
+                    <span>Запомнить меня</span>
                 </label>
             </div>
 
-            <button type="submit">Sign In</button>
+            <button type="submit">Войти</button>
         </form>
 
         <p class="auth-links">
-            Need an account?
-            <a href="{{ url_for('register') }}">Register</a>
+            Нет аккаунта?
+            <a href="{{ url_for('register') }}">Зарегистрироваться</a>
         </p>
     </div>
 </section>
