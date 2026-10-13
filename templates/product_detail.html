@@ -21,10 +21,6 @@
                 <strong>{{ category.name if category else 'Неизвестная категория' }}</strong>
             </div>
             <div class="detail-row">
-                <span>Филиал</span>
-                <strong>{{ branch.name if branch else 'Неизвестный филиал' }}</strong>
-            </div>
-            <div class="detail-row">
                 <span>Закупочная цена</span>
                 <strong>{{ '%.2f'|format(product.purchase_price) }}</strong>
             </div>
@@ -37,26 +33,34 @@
 
     <div class="panel-card metrics-panel">
         <div class="panel-header">
-            <h3>Остаток</h3>
+            <h3>Остатки по филиалам</h3>
         </div>
 
         <div class="profile-details">
+            {% for branch, inventory in branch_inventory_rows %}
             <div class="detail-row">
-                <span>Количество</span>
-                <strong>{{ product.stock_quantity }}</strong>
+                <span>{{ branch.name }} — текущий остаток</span>
+                <strong>{{ inventory.stock_quantity ~ ' шт.' if inventory else 'Не назначен' }}</strong>
+            </div>
+            {% if inventory %}
+            <div class="detail-row">
+                <span>{{ branch.name }} — минимальный остаток</span>
+                <strong>{{ inventory.minimum_stock }} шт.</strong>
             </div>
             <div class="detail-row">
-                <span>Минимальный остаток</span>
-                <strong>{{ product.minimum_stock }}</strong>
-            </div>
-            <div class="detail-row">
-                <span>Статус</span>
+                <span>{{ branch.name }} — статус</span>
                 <strong>
-                    <span class="status-badge {{ 'low-stock' if low_stock else 'active' }}">
-                        {{ 'Мало на складе' if low_stock else 'В наличии' }}
+                    <span class="status-badge {{ 'low-stock' if inventory.stock_quantity <= inventory.minimum_stock else 'active' }}">
+                        {{ 'Мало на складе' if inventory.stock_quantity <= inventory.minimum_stock else 'В наличии' }}
                     </span>
                 </strong>
             </div>
+            {% endif %}
+            {% else %}
+            <div class="empty-state-box">
+                <p>Нет доступных данных об остатках филиалов.</p>
+            </div>
+            {% endfor %}
         </div>
 
         {% if (session.get('role') or '').lower() in ['admin', 'manager'] %}

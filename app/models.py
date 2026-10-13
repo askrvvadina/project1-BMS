@@ -12,6 +12,23 @@ class User(db.Model):
     role = db.Column(db.String(20), nullable=False)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    employee_id = db.Column(
+        db.Integer,
+        db.ForeignKey("employees.id"),
+        nullable=True,
+        unique=True,
+    )
+    employee = db.relationship(
+        "Employee",
+        back_populates="user",
+        uselist=False,
+        foreign_keys=[employee_id],
+    )
+    created_sales = db.relationship(
+        "Sale",
+        back_populates="created_by_user",
+        foreign_keys="Sale.created_by_user_id",
+    )
 
 
 class Branch(db.Model):
@@ -40,6 +57,12 @@ class Employee(db.Model):
         nullable=False
     )
     status = db.Column(db.String(20), nullable=False, default="active")
+    user = db.relationship(
+        "User",
+        back_populates="employee",
+        uselist=False,
+        foreign_keys="User.employee_id",
+    )
 
 
 class Category(db.Model):
@@ -136,12 +159,22 @@ class InventoryTransaction(db.Model):
         db.ForeignKey("branch_inventory.id"),
         nullable=True,
     )
+    sale_id = db.Column(
+        db.Integer,
+        db.ForeignKey("sales.id"),
+        nullable=True,
+    )
     transaction_type = db.Column(db.String(20), nullable=False)
     quantity = db.Column(db.Integer, nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     branch_inventory = db.relationship(
         "BranchInventory",
         back_populates="transactions",
+    )
+    sale = db.relationship(
+        "Sale",
+        back_populates="inventory_transactions",
+        foreign_keys=[sale_id],
     )
 
 
@@ -176,6 +209,21 @@ class Sale(db.Model):
     discount = db.Column(db.Numeric(10, 2), nullable=True)
     payment_method = db.Column(db.String(30), nullable=False)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_by_user_id = db.Column(
+        db.Integer,
+        db.ForeignKey("users.id"),
+        nullable=True,
+    )
+    created_by_user = db.relationship(
+        "User",
+        back_populates="created_sales",
+        foreign_keys=[created_by_user_id],
+    )
+    inventory_transactions = db.relationship(
+        "InventoryTransaction",
+        back_populates="sale",
+        foreign_keys="InventoryTransaction.sale_id",
+    )
 
 
 class SaleItem(db.Model):
@@ -197,6 +245,25 @@ class SaleItem(db.Model):
 
     quantity = db.Column(db.Integer, nullable=False)
     unit_price = db.Column(db.Numeric(10, 2), nullable=False)
+
+
+def resolve_employee_branch_id(user):
+    """Return an employee user's valid assigned branch ID, or None."""
+    if user is None or (user.role or "").lower() != "employee":
+        return None
+
+    if user.employee_id is None:
+        return None
+
+    employee = db.session.get(Employee, user.employee_id)
+    if employee is None:
+        return None
+
+    branch = db.session.get(Branch, employee.branch_id)
+    if branch is None:
+        return None
+
+    return branch.id
 
 
 class Shift(db.Model):

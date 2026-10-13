@@ -34,6 +34,7 @@ Stores system accounts and role information.
 | role | String | Not Null | User role: Admin, Manager, or Employee |
 | is_active | Boolean | Not Null | Indicates whether the account is active |
 | created_at | DateTime | Not Null | Account creation date and time |
+| employee_id | Integer | Foreign Key → employees.id, Nullable, Unique | Optional one-to-one link to the employee profile |
 
 ## 2. branches
 
@@ -61,6 +62,9 @@ Stores information about employees.
 | hire_date | Date | Not Null | Date when the employee was hired |
 | branch_id | Integer | Foreign Key → branches.id, Not Null | Branch where the employee works |
 | status | String | Not Null | Employee status |
+
+An Employee may remain unlinked from a User. User-to-Employee links are
+optional; existing records are not associated automatically.
 
 ## 4. categories
 
@@ -121,6 +125,7 @@ Stores the history of product stock movements.
 | transaction_type | String | Not Null | Transaction type: stock_in or write_off |
 | quantity | Integer | Not Null | Quantity of products moved |
 | created_at | DateTime | Not Null | Date and time of the transaction |
+| sale_id | Integer | Foreign Key → sales.id, Nullable | Optional sale that caused the inventory movement |
 
 ## 8. customers
 
@@ -147,6 +152,7 @@ Stores completed sales.
 | discount | Decimal | Nullable | Optional discount applied to the sale |
 | payment_method | String | Not Null | Payment method used for the sale |
 | created_at | DateTime | Not Null | Date and time of the sale |
+| created_by_user_id | Integer | Foreign Key → users.id, Nullable | User who processed the sale |
 
 ## 10. sale_items
 
@@ -219,7 +225,9 @@ users
   1
   ├──────────── N notifications
   │
-  └──────────── N audit_logs
+  ├──────────── N audit_logs
+  ├──────────── N sales (created_by_user_id)
+  └──────────── 0..1 employees
 
 
 branches
@@ -238,7 +246,8 @@ categories
 
 employees
   1
-  └──────────── N shifts
+  ├──────────── N shifts
+  └──────────── 0..1 users
 
 
 customers
@@ -261,4 +270,5 @@ branch_inventory
 
 sales
   1
-  └──────────── N sale_items
+  ├──────────── N sale_items
+  └──────────── N inventory_transactions

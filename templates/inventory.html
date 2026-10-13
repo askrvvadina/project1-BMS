@@ -194,7 +194,15 @@
                     <td>{{ branch_name }}</td>
                     <td>{{ product_name }}</td>
                     <td>{{ product_sku }}</td>
-                    <td>{{ 'Поступление' if transaction.transaction_type == 'stock_in' else 'Списание' }}</td>
+                    <td>
+                        {% if transaction.transaction_type == 'stock_in' %}
+                        Поступление
+                        {% elif transaction.transaction_type == 'sale_out' %}
+                        Продажа
+                        {% else %}
+                        Списание
+                        {% endif %}
+                    </td>
                     <td>{{ transaction.quantity }}</td>
                 </tr>
                 {% endfor %}

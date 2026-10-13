@@ -1,13 +1,13 @@
 import os
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 
 import click
-from flask import Flask, current_app, flash, redirect, render_template, request, session, url_for
+from flask import Flask, abort, current_app, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import or_, update
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import and_, or_, text, update
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 
@@ -65,6 +65,48 @@ def create_app(config=None):
         return render_template("403.html", requested_path=request.path), 403
 
     from app import models
+
+    def resolve_management_branch(explicit_branch_id=None):
+        branches = models.Branch.query.order_by(models.Branch.name.asc()).all()
+        has_explicit_branch = (
+            explicit_branch_id is not None
+            and str(explicit_branch_id).strip() != ""
+        )
+        invalid_explicit_branch = False
+
+        if has_explicit_branch:
+            try:
+                parsed_branch_id = int(str(explicit_branch_id).strip())
+            except ValueError:
+                parsed_branch_id = -1
+
+            selected_branch = (
+                models.Branch.query.filter_by(id=parsed_branch_id).first()
+                if parsed_branch_id > 0
+                else None
+            )
+            if selected_branch is not None:
+                session["management_branch_id"] = selected_branch.id
+                return selected_branch, False
+            invalid_explicit_branch = True
+
+        stored_branch_id = session.get("management_branch_id")
+        if stored_branch_id is not None:
+            try:
+                parsed_stored_branch_id = int(stored_branch_id)
+            except (TypeError, ValueError):
+                parsed_stored_branch_id = -1
+
+            stored_branch = (
+                models.Branch.query.filter_by(id=parsed_stored_branch_id).first()
+                if parsed_stored_branch_id > 0
+                else None
+            )
+            if stored_branch is not None:
+                return stored_branch, invalid_explicit_branch
+            session.pop("management_branch_id", None)
+
+        return (branches[0] if branches else None), invalid_explicit_branch
 
     def sync_low_stock_notifications(branch_inventory):
         product = branch_inventory.product
@@ -410,7 +452,85 @@ def create_app(config=None):
     @role_required("admin")
     def users():
         user_list = models.User.query.order_by(models.User.created_at.desc()).all()
-        return render_template("users.html", users=user_list, current_user_id=session.get("user_id"))
+        employee_options = (
+            db.session.query(models.Employee, models.Branch.name)
+            .outerjoin(models.Branch, models.Employee.branch_id == models.Branch.id)
+            .order_by(models.Employee.full_name.asc())
+            .all()
+        )
+        employee_user_ids = {
+            user.employee_id: user.id
+            for user in user_list
+            if user.employee_id is not None
+        }
+        employee_branch_names = {
+            employee.id: branch_name
+            for employee, branch_name in employee_options
+        }
+        employees_by_id = {
+            row[0].id: row[0]
+            for row in employee_options
+        }
+        return render_template(
+            "users.html",
+            users=user_list,
+            current_user_id=session.get("user_id"),
+            employee_options=employee_options,
+            employee_user_ids=employee_user_ids,
+            employee_branch_names=employee_branch_names,
+            employees_by_id=employees_by_id,
+        )
+
+    @app.route("/users/<int:user_id>/employee", methods=["POST"])
+    @login_required
+    @role_required("admin")
+    def update_user_employee(user_id):
+        target_user = models.User.query.get(user_id)
+        if target_user is None:
+            flash("Пользователь не найден.", "error")
+            return redirect(url_for("users"))
+
+        if (target_user.role or "").lower() != "employee":
+            flash("Связать сотрудника можно только с учётной записью сотрудника.", "error")
+            return redirect(url_for("users"))
+
+        employee_id_value = request.form.get("employee_id", "").strip()
+        employee = None
+        if employee_id_value:
+            try:
+                employee_id = int(employee_id_value)
+                if employee_id < 1:
+                    raise ValueError
+            except ValueError:
+                flash("Выберите существующего сотрудника.", "error")
+                return redirect(url_for("users"))
+
+            employee = models.Employee.query.filter_by(id=employee_id).first()
+            if employee is None:
+                flash("Выберите существующего сотрудника.", "error")
+                return redirect(url_for("users"))
+
+            already_linked = models.User.query.filter(
+                models.User.employee_id == employee.id,
+                models.User.id != target_user.id,
+            ).first()
+            if already_linked is not None:
+                flash("Этот сотрудник уже связан с другой учётной записью.", "error")
+                return redirect(url_for("users"))
+
+        target_user.employee_id = employee.id if employee is not None else None
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash("Не удалось сохранить связь с сотрудником. Обновите страницу и повторите попытку.", "error")
+            return redirect(url_for("users"))
+
+        if employee is None:
+            flash("Связь с сотрудником снята.", "success")
+        else:
+            flash("Учётная запись связана с сотрудником.", "success")
+        return redirect(url_for("users"))
 
     @app.route("/users/<int:user_id>/toggle-active", methods=["POST"])
     @login_required
@@ -842,17 +962,47 @@ def create_app(config=None):
     def products():
         search_query = request.args.get("q", "").strip()
         category_filter = request.args.get("category_id", "").strip()
-        branch_filter = request.args.get("branch_id", "").strip()
         active_sort = request.args.get("sort", "name_asc")
+        role = (session.get("role") or "").lower()
+        branches = models.Branch.query.order_by(models.Branch.name.asc()).all()
+        branch_error = False
 
+        if role in {"admin", "manager"}:
+            selected_branch, branch_error = resolve_management_branch(
+                request.args.get("branch_id")
+            )
+        else:
+            user = db.session.get(models.User, session.get("user_id"))
+            employee_branch_id = (
+                models.resolve_employee_branch_id(user) if user is not None else None
+            )
+            selected_branch = (
+                db.session.get(models.Branch, employee_branch_id)
+                if employee_branch_id is not None
+                else None
+            )
+            branches = [selected_branch] if selected_branch is not None else []
+
+        if branch_error:
+            flash("Выбранный филиал не найден. Показан безопасный филиал.", "error")
+
+        branch_filter = (
+            str(selected_branch.id) if selected_branch is not None else ""
+        )
         query = db.session.query(
             models.Product,
             models.Category.name,
-            models.Branch.name,
+            models.BranchInventory,
         ).join(
             models.Category, models.Product.category_id == models.Category.id
-        ).join(
-            models.Branch, models.Product.branch_id == models.Branch.id
+        ).outerjoin(
+            models.BranchInventory,
+            and_(
+                models.BranchInventory.product_id == models.Product.id,
+                models.BranchInventory.branch_id == (
+                    selected_branch.id if selected_branch is not None else -1
+                ),
+            ),
         )
 
         if search_query:
@@ -870,20 +1020,17 @@ def create_app(config=None):
                 category_filter_id = -1
             query = query.filter(models.Product.category_id == category_filter_id)
 
-        if branch_filter:
-            try:
-                branch_filter_id = int(branch_filter)
-            except ValueError:
-                branch_filter_id = -1
-            query = query.filter(models.Product.branch_id == branch_filter_id)
-
         sort_columns = {
             "name_asc": models.Product.name.asc(),
             "name_desc": models.Product.name.desc(),
             "price_low": models.Product.selling_price.asc(),
             "price_high": models.Product.selling_price.desc(),
-            "stock_low": models.Product.stock_quantity.asc(),
-            "stock_high": models.Product.stock_quantity.desc(),
+            "stock_low": db.func.coalesce(
+                models.BranchInventory.stock_quantity, -1
+            ).asc(),
+            "stock_high": db.func.coalesce(
+                models.BranchInventory.stock_quantity, -1
+            ).desc(),
         }
         if active_sort not in sort_columns:
             active_sort = "name_asc"
@@ -895,8 +1042,9 @@ def create_app(config=None):
             search_query=search_query,
             category_filter=category_filter,
             branch_filter=branch_filter,
+            selected_branch=selected_branch,
+            branches=branches,
             active_sort=active_sort,
-            **product_form_options(),
         )
 
     @app.route("/products/<int:product_id>")
@@ -909,13 +1057,38 @@ def create_app(config=None):
             return redirect(url_for("products"))
 
         category = models.Category.query.filter_by(id=product.category_id).first()
-        branch = models.Branch.query.filter_by(id=product.branch_id).first()
+        role = (session.get("role") or "").lower()
+        if role in {"admin", "manager"}:
+            branches = models.Branch.query.order_by(models.Branch.name.asc()).all()
+        else:
+            user = db.session.get(models.User, session.get("user_id"))
+            employee_branch_id = (
+                models.resolve_employee_branch_id(user) if user is not None else None
+            )
+            employee_branch = (
+                db.session.get(models.Branch, employee_branch_id)
+                if employee_branch_id is not None
+                else None
+            )
+            branches = [employee_branch] if employee_branch is not None else []
+
+        inventory_by_branch = {
+            inventory.branch_id: inventory
+            for inventory in models.BranchInventory.query.filter(
+                models.BranchInventory.product_id == product.id,
+                models.BranchInventory.branch_id.in_(
+                    [branch.id for branch in branches]
+                ),
+            ).all()
+        } if branches else {}
+        branch_inventory_rows = [
+            (branch, inventory_by_branch.get(branch.id)) for branch in branches
+        ]
         return render_template(
             "product_detail.html",
             product=product,
             category=category,
-            branch=branch,
-            low_stock=product.stock_quantity <= product.minimum_stock,
+            branch_inventory_rows=branch_inventory_rows,
         )
 
     @app.route("/products/create", methods=["GET", "POST"])
@@ -932,6 +1105,9 @@ def create_app(config=None):
             "stock_quantity": "0",
             "minimum_stock": "0",
         }
+        default_branch, _ = resolve_management_branch()
+        if default_branch is not None:
+            form_data["branch_id"] = str(default_branch.id)
 
         if request.method == "POST":
             for field in (
@@ -1188,25 +1364,31 @@ def create_app(config=None):
             )
 
         branch_id_value = (
-            request.form.get("branch_id", "").strip()
+            request.form.get("branch_id")
             if request.method == "POST"
-            else request.args.get("branch_id", "").strip()
+            else request.args.get("branch_id")
         )
-        try:
-            selected_branch_id = int(branch_id_value) if branch_id_value else branches[0].id
-        except ValueError:
-            selected_branch_id = -1
-        selected_branch = models.Branch.query.filter_by(
-            id=selected_branch_id
-        ).first()
-        if selected_branch is None:
+        selected_branch, invalid_branch_request = resolve_management_branch(
+            branch_id_value
+        )
+        if invalid_branch_request:
             flash("Выберите существующий филиал.", "error")
             if request.method == "POST":
-                return redirect(
-                    url_for("inventory", branch_id=branches[0].id)
-                )
-            selected_branch = branches[0]
-            selected_branch_id = selected_branch.id
+                if selected_branch is not None:
+                    return redirect(
+                        url_for("inventory", branch_id=selected_branch.id)
+                    )
+                return redirect(url_for("inventory"))
+        if selected_branch is None:
+            return render_template(
+                "inventory.html",
+                branches=[],
+                selected_branch=None,
+                branch_inventory_rows=[],
+                available_products=[],
+                transaction_rows=[],
+            )
+        selected_branch_id = selected_branch.id
 
         def inventory_redirect():
             return redirect(
@@ -1542,11 +1724,497 @@ def create_app(config=None):
     @login_required
     @role_required("admin", "manager", "employee")
     def sales():
+        user = db.session.get(models.User, session.get("user_id"))
+        if user is None:
+            session.clear()
+            flash("Сеанс завершён. Войдите в систему снова.", "error")
+            return redirect(url_for("login"))
+
+        role = (user.role or "").lower()
+        if role not in {"admin", "manager", "employee"}:
+            return render_template("403.html", requested_path=request.path), 403
+
+        branches = models.Branch.query.order_by(models.Branch.name.asc()).all()
+        selected_branch = None
+        branch_error = None
+
+        if role == "employee":
+            branch_id = models.resolve_employee_branch_id(user)
+            if branch_id is None:
+                branch_error = (
+                    "Для работы с кассой администратор должен связать вашу "
+                    "учётную запись с сотрудником, у которого указан действующий филиал."
+                )
+            else:
+                selected_branch = db.session.get(models.Branch, branch_id)
+                if selected_branch is None:
+                    branch_error = (
+                        "Не удалось определить филиал для вашей учётной записи. "
+                        "Обратитесь к администратору."
+                    )
+        elif not branches:
+            branch_error = "Для работы с кассой сначала необходимо создать филиал."
+        else:
+            selected_branch, invalid_branch_request = resolve_management_branch(
+                request.args.get("branch_id")
+            )
+            if invalid_branch_request:
+                flash(
+                    "Выбранный филиал не найден. Показан безопасный филиал.",
+                    "error",
+                )
+
+        branch_inventory_rows = []
+        customers = []
+        if selected_branch is not None:
+            branch_inventory_rows = (
+                db.session.query(models.BranchInventory, models.Product)
+                .join(
+                    models.Product,
+                    models.Product.id == models.BranchInventory.product_id,
+                )
+                .filter(models.BranchInventory.branch_id == selected_branch.id)
+                .order_by(models.Product.name.asc(), models.Product.sku.asc())
+                .all()
+            )
+            customers = models.Customer.query.order_by(
+                models.Customer.name.asc()
+            ).all()
+
         return render_template(
-            "placeholder.html",
-            page_title="Продажи",
-            message="Управление продажами будет добавлено на следующем этапе разработки."
+            "sales.html",
+            branches=branches if role in {"admin", "manager"} else [],
+            selected_branch=selected_branch,
+            branch_inventory_rows=branch_inventory_rows,
+            customers=customers,
+            branch_error=branch_error,
+            can_select_branch=role in {"admin", "manager"},
         )
+
+    @app.route("/sales/history")
+    @login_required
+    @role_required("admin", "manager", "employee")
+    def sales_history():
+        user = db.session.get(models.User, session.get("user_id"))
+        if user is None:
+            session.clear()
+            flash("Сеанс завершён. Войдите в систему снова.", "error")
+            return redirect(url_for("login"))
+
+        role = (user.role or "").lower()
+        if role not in {"admin", "manager", "employee"}:
+            return render_template("403.html", requested_path=request.path), 403
+
+        branches = models.Branch.query.order_by(models.Branch.name.asc()).all()
+        selected_branch = None
+        if role in {"admin", "manager"}:
+            requested_branch = request.args.get("branch_id")
+            if requested_branch == "all":
+                branch_error = False
+            else:
+                selected_branch, branch_error = resolve_management_branch(
+                    requested_branch
+                )
+            if branch_error:
+                flash(
+                    "Выбранный филиал не найден. Показан безопасный филиал.",
+                    "error",
+                )
+        else:
+            employee_branch_id = models.resolve_employee_branch_id(user)
+            if employee_branch_id is None:
+                return render_template("403.html", requested_path=request.path), 403
+            selected_branch = db.session.get(models.Branch, employee_branch_id)
+            if selected_branch is None:
+                return render_template("403.html", requested_path=request.path), 403
+            branches = [selected_branch]
+
+        payment_method = request.args.get("payment_method", "").strip()
+        if payment_method not in {"", "cash", "card"}:
+            flash("Выбран недопустимый способ оплаты.", "error")
+            payment_method = ""
+
+        date_from_value = request.args.get("date_from", "").strip()
+        date_to_value = request.args.get("date_to", "").strip()
+        date_from = None
+        date_to = None
+        try:
+            if date_from_value:
+                date_from = date.fromisoformat(date_from_value)
+        except ValueError:
+            flash("Укажите корректную начальную дату.", "error")
+            date_from_value = ""
+        try:
+            if date_to_value:
+                date_to = date.fromisoformat(date_to_value)
+        except ValueError:
+            flash("Укажите корректную конечную дату.", "error")
+            date_to_value = ""
+        if date_from is not None and date_to is not None and date_from > date_to:
+            flash("Начальная дата не может быть позже конечной.", "error")
+            date_from = None
+            date_to = None
+            date_from_value = ""
+            date_to_value = ""
+
+        sales_query = (
+            db.session.query(
+                models.Sale,
+                models.Branch,
+                models.User,
+                models.Customer,
+            )
+            .join(models.Branch, models.Sale.branch_id == models.Branch.id)
+            .outerjoin(
+                models.User,
+                models.Sale.created_by_user_id == models.User.id,
+            )
+            .outerjoin(
+                models.Customer,
+                models.Sale.customer_id == models.Customer.id,
+            )
+        )
+        if selected_branch is not None:
+            sales_query = sales_query.filter(
+                models.Sale.branch_id == selected_branch.id
+            )
+        if payment_method:
+            sales_query = sales_query.filter(
+                models.Sale.payment_method == payment_method
+            )
+        if date_from is not None:
+            sales_query = sales_query.filter(
+                models.Sale.created_at >= datetime.combine(
+                    date_from, datetime.min.time()
+                )
+            )
+        if date_to is not None:
+            sales_query = sales_query.filter(
+                models.Sale.created_at < datetime.combine(
+                    date_to + timedelta(days=1), datetime.min.time()
+                )
+            )
+
+        total_sales = sales_query.count()
+        per_page = 20
+        pages = max(1, (total_sales + per_page - 1) // per_page)
+        requested_page = request.args.get("page", default=1, type=int) or 1
+        page = min(max(requested_page, 1), pages)
+        sale_rows = (
+            sales_query.order_by(
+                models.Sale.created_at.desc(),
+                models.Sale.id.desc(),
+            )
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+
+        filter_args = {}
+        if role in {"admin", "manager"}:
+            filter_args["branch_id"] = (
+                str(selected_branch.id) if selected_branch is not None else "all"
+            )
+        if payment_method:
+            filter_args["payment_method"] = payment_method
+        if date_from_value:
+            filter_args["date_from"] = date_from_value
+        if date_to_value:
+            filter_args["date_to"] = date_to_value
+
+        return render_template(
+            "sales_history.html",
+            sales=sale_rows,
+            branches=branches if role in {"admin", "manager"} else [],
+            selected_branch=selected_branch,
+            can_select_branch=role in {"admin", "manager"},
+            payment_method=payment_method,
+            date_from_value=date_from_value,
+            date_to_value=date_to_value,
+            filter_args=filter_args,
+            page=page,
+            pages=pages,
+            total_sales=total_sales,
+        )
+
+    @app.route("/sales/<int:sale_id>/receipt")
+    @login_required
+    @role_required("admin", "manager", "employee")
+    def sales_receipt(sale_id):
+        user = db.session.get(models.User, session.get("user_id"))
+        if user is None:
+            session.clear()
+            flash("Сеанс завершён. Войдите в систему снова.", "error")
+            return redirect(url_for("login"))
+
+        role = (user.role or "").lower()
+        if role not in {"admin", "manager", "employee"}:
+            return render_template("403.html", requested_path=request.path), 403
+
+        sale = db.session.get(models.Sale, sale_id)
+        if sale is None:
+            abort(404)
+        if role == "employee":
+            employee_branch_id = models.resolve_employee_branch_id(user)
+            if employee_branch_id is None or sale.branch_id != employee_branch_id:
+                return render_template("403.html", requested_path=request.path), 403
+
+        branch = db.session.get(models.Branch, sale.branch_id)
+        seller = db.session.get(models.User, sale.created_by_user_id)
+        customer = (
+            db.session.get(models.Customer, sale.customer_id)
+            if sale.customer_id is not None
+            else None
+        )
+        sale_items = (
+            db.session.query(models.SaleItem, models.Product)
+            .join(
+                models.Product,
+                models.SaleItem.product_id == models.Product.id,
+            )
+            .filter(models.SaleItem.sale_id == sale.id)
+            .order_by(models.SaleItem.id.asc())
+            .all()
+        )
+        return render_template(
+            "sales_receipt.html",
+            sale=sale,
+            branch=branch,
+            seller=seller,
+            customer=customer,
+            sale_items=sale_items,
+        )
+
+    @app.route("/sales/checkout", methods=["POST"])
+    @login_required
+    @role_required("admin", "manager", "employee")
+    def sales_checkout():
+        class CheckoutError(ValueError):
+            pass
+
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="Некорректный запрос на оформление продажи."), 400
+
+        items_payload = payload.get("items")
+        if not isinstance(items_payload, list) or not items_payload:
+            return jsonify(error="Корзина пуста."), 400
+
+        product_quantities = []
+        seen_product_ids = set()
+        for item in items_payload:
+            if not isinstance(item, dict):
+                return jsonify(error="Некорректный состав корзины."), 400
+
+            product_id = item.get("product_id")
+            quantity = item.get("quantity")
+            if (
+                type(product_id) is not int
+                or product_id < 1
+                or product_id > 0x7FFFFFFFFFFFFFFF
+            ):
+                return jsonify(error="В корзине указан некорректный товар."), 400
+            if type(quantity) is not int or quantity <= 0:
+                return jsonify(error="Количество товара должно быть положительным целым числом."), 400
+            if product_id in seen_product_ids:
+                return jsonify(error="Один и тот же товар указан в корзине несколько раз."), 400
+
+            seen_product_ids.add(product_id)
+            product_quantities.append((product_id, quantity))
+
+        payment_method = payload.get("payment_method")
+        if not isinstance(payment_method, str) or payment_method not in {
+            "cash",
+            "card",
+        }:
+            return jsonify(error="Выберите допустимый способ оплаты."), 400
+
+        customer_id = payload.get("customer_id")
+        if customer_id == "":
+            customer_id = None
+        if customer_id is not None and (
+            type(customer_id) is not int
+            or customer_id < 1
+            or customer_id > 0x7FFFFFFFFFFFFFFF
+        ):
+            return jsonify(error="Выбранный клиент не найден."), 400
+
+        user_id = session.get("user_id")
+        try:
+            with db.session.begin():
+                if db.engine.dialect.name == "sqlite":
+                    # Reserve the write lock before reading stock, serializing competing checkouts.
+                    db.session.execute(text("BEGIN IMMEDIATE"))
+
+                user = db.session.get(models.User, user_id)
+                if user is None or not user.is_active:
+                    raise CheckoutError("Учётная запись недоступна. Войдите в систему снова.")
+
+                role = (user.role or "").lower()
+                if role == "employee":
+                    branch_id = models.resolve_employee_branch_id(user)
+                    if branch_id is None:
+                        raise CheckoutError(
+                            "Ваша учётная запись не связана с действующим сотрудником и филиалом. "
+                            "Обратитесь к администратору."
+                        )
+                elif role in {"admin", "manager"}:
+                    branch_id = payload.get("branch_id")
+                    if (
+                        type(branch_id) is not int
+                        or branch_id < 1
+                        or branch_id > 0x7FFFFFFFFFFFFFFF
+                    ):
+                        raise CheckoutError("Выберите существующий филиал.")
+                else:
+                    raise CheckoutError("У вас нет доступа к оформлению продаж.")
+
+                branch = db.session.get(models.Branch, branch_id)
+                if branch is None:
+                    raise CheckoutError("Выбранный филиал не найден.")
+
+                customer = None
+                if customer_id is not None:
+                    customer = db.session.get(models.Customer, customer_id)
+                    if customer is None:
+                        raise CheckoutError("Выбранный клиент не найден.")
+
+                product_ids = [product_id for product_id, _ in product_quantities]
+                products = {
+                    product.id: product
+                    for product in models.Product.query.filter(
+                        models.Product.id.in_(product_ids)
+                    ).all()
+                }
+                if len(products) != len(product_ids):
+                    raise CheckoutError("Один из товаров больше не существует.")
+
+                branch_inventory = {
+                    item.product_id: item
+                    for item in models.BranchInventory.query.filter(
+                        models.BranchInventory.branch_id == branch.id,
+                        models.BranchInventory.product_id.in_(product_ids),
+                    ).all()
+                }
+                if len(branch_inventory) != len(product_ids):
+                    raise CheckoutError(
+                        "Один из товаров не назначен в выбранный филиал."
+                    )
+
+                priced_items = []
+                sale_total = Decimal("0.00")
+                for product_id, quantity in product_quantities:
+                    product = products[product_id]
+                    inventory = branch_inventory[product_id]
+                    unit_price = product.selling_price
+                    if (
+                        not isinstance(unit_price, Decimal)
+                        or not unit_price.is_finite()
+                        or unit_price < 0
+                    ):
+                        raise CheckoutError(
+                            f"Для товара «{product.name}» указана некорректная цена."
+                        )
+                    if inventory.stock_quantity < quantity:
+                        raise CheckoutError(
+                            f"Недостаточно товара «{product.name}» на складе филиала."
+                        )
+
+                    line_total = unit_price * quantity
+                    sale_total += line_total
+                    priced_items.append(
+                        (product, inventory, quantity, unit_price)
+                    )
+
+                sale = models.Sale(
+                    branch_id=branch.id,
+                    customer_id=customer.id if customer is not None else None,
+                    total_amount=sale_total,
+                    discount=Decimal("0.00"),
+                    payment_method=payment_method,
+                    created_by_user_id=user.id,
+                )
+                db.session.add(sale)
+                db.session.flush()
+
+                stock_after_sale = []
+                for product, inventory, quantity, unit_price in priced_items:
+                    db.session.add(
+                        models.SaleItem(
+                            sale_id=sale.id,
+                            product_id=product.id,
+                            quantity=quantity,
+                            unit_price=unit_price,
+                        )
+                    )
+
+                    stock_result = db.session.execute(
+                        update(models.BranchInventory)
+                        .where(
+                            models.BranchInventory.id == inventory.id,
+                            models.BranchInventory.branch_id == branch.id,
+                            models.BranchInventory.product_id == product.id,
+                            models.BranchInventory.stock_quantity >= quantity,
+                        )
+                        .values(
+                            stock_quantity=(
+                                models.BranchInventory.stock_quantity - quantity
+                            )
+                        )
+                        .execution_options(synchronize_session=False)
+                    )
+                    if stock_result.rowcount != 1:
+                        raise CheckoutError(
+                            f"Недостаточно товара «{product.name}» на складе филиала."
+                        )
+
+                    db.session.expire(inventory, ["stock_quantity"])
+                    db.session.add(
+                        models.InventoryTransaction(
+                            product_id=product.id,
+                            branch_inventory_id=inventory.id,
+                            transaction_type="sale_out",
+                            quantity=quantity,
+                            sale_id=sale.id,
+                        )
+                    )
+                    sync_low_stock_notifications(inventory)
+                    stock_after_sale.append(
+                        {
+                            "product_id": product.id,
+                            "stock_quantity": inventory.stock_quantity,
+                        }
+                    )
+                response_data = {
+                    "sale_id": sale.id,
+                    "receipt_url": url_for("sales_receipt", sale_id=sale.id),
+                    "branch_id": branch.id,
+                    "total_amount": format(sale_total, ".2f"),
+                    "stock": stock_after_sale,
+                }
+        except CheckoutError as error:
+            db.session.rollback()
+            return jsonify(error=str(error)), 400
+        except OperationalError:
+            db.session.rollback()
+            current_app.logger.info(
+                "POS checkout conflicted with another inventory transaction for user %s.",
+                user_id,
+            )
+            return jsonify(
+                error="Остаток изменился во время оформления. Обновите данные и повторите попытку."
+            ), 409
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception(
+                "POS checkout failed for authenticated user %s.",
+                user_id,
+            )
+            return jsonify(
+                error="Не удалось оформить продажу. Изменения не сохранены. Повторите попытку."
+            ), 500
+
+        return jsonify(success=True, **response_data), 201
 
     @app.route("/customers")
     @login_required

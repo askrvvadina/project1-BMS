@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}История продаж | BMS{% endblock %}
+{% block page_title %}История продаж{% endblock %}
+
+{% block content %}
+<section class="sales-history-page">
+    <div class="sales-page-actions">
+        <a class="secondary-btn" href="{{ url_for('sales') }}">Вернуться к кассе</a>
+    </div>
+
+    <form class="sales-filters panel-card" method="GET" action="{{ url_for('sales_history') }}">
+        {% if can_select_branch %}
+        <label>
+            Филиал
+            <select name="branch_id">
+                <option value="all" {{ 'selected' if not selected_branch else '' }}>Все филиалы</option>
+                {% for branch in branches %}
+                <option value="{{ branch.id }}" {{ 'selected' if selected_branch and selected_branch.id == branch.id else '' }}>{{ branch.name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        {% endif %}
+        <label>
+            Способ оплаты
+            <select name="payment_method">
+                <option value="" {{ 'selected' if not payment_method else '' }}>Все способы</option>
+                <option value="cash" {{ 'selected' if payment_method == 'cash' else '' }}>Наличные</option>
+                <option value="card" {{ 'selected' if payment_method == 'card' else '' }}>Карта</option>
+            </select>
+        </label>
+        <label>
+            С даты
+            <input type="date" name="date_from" value="{{ date_from_value }}">
+        </label>
+        <label>
+            По дату
+            <input type="date" name="date_to" value="{{ date_to_value }}">
+        </label>
+        <button class="primary-btn" type="submit">Применить</button>
+    </form>
+
+    <section class="panel-card sales-history-card">
+        <div class="sales-history-heading">
+            <h2>Продажи</h2>
+            <span>{{ total_sales }} записей</span>
+        </div>
+        {% if sales %}
+        <div class="table-wrap">
+            <table class="sales-history-table">
+                <thead>
+                    <tr>
+                        <th>№ продажи</th>
+                        <th>Дата и время</th>
+                        <th>Филиал</th>
+                        <th>Продавец</th>
+                        <th>Клиент</th>
+                        <th>Оплата</th>
+                        <th>Итого</th>
+                        <th>Чек</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for sale, branch, seller, customer in sales %}
+                    <tr>
+                        <td>#{{ sale.id }}</td>
+                        <td>{{ sale.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                        <td>{{ branch.name }}</td>
+                        <td>{{ seller.username if seller else 'Не указан' }}</td>
+                        <td>{{ customer.name if customer else 'Без клиента' }}</td>
+                        <td>{{ {'cash': 'Наличные', 'card': 'Карта'}.get(sale.payment_method, sale.payment_method) }}</td>
+                        <td>{{ '%.2f'|format(sale.total_amount) }}</td>
+                        <td><a class="receipt-link" href="{{ url_for('sales_receipt', sale_id=sale.id) }}">Открыть чек</a></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="sales-history-empty">Продажи по выбранным условиям не найдены.</div>
+        {% endif %}
+
+        {% if pages > 1 %}
+        <nav class="sales-pagination" aria-label="Страницы истории продаж">
+            {% if page > 1 %}
+            <a class="secondary-btn" href="{{ url_for('sales_history', page=page - 1, **filter_args) }}">Назад</a>
+            {% endif %}
+            <span>Страница {{ page }} из {{ pages }}</span>
+            {% if page < pages %}
+            <a class="secondary-btn" href="{{ url_for('sales_history', page=page + 1, **filter_args) }}">Далее</a>
+            {% endif %}
+        </nav>
+        {% endif %}
+    </section>
+</section>
+{% endblock %}

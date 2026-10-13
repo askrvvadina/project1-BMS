@@ -18,6 +18,7 @@
                     <th>Имя пользователя</th>
                     <th>Электронная почта</th>
                     <th>Роль</th>
+                    <th>Связанный сотрудник</th>
                     <th>Статус</th>
                     <th>Действия</th>
                 </tr>
@@ -28,6 +29,32 @@
                     <td>{{ user.username }}</td>
                     <td>{{ user.email }}</td>
                     <td>{{ {'admin': 'Администратор', 'manager': 'Менеджер', 'employee': 'Сотрудник'}.get(user.role|lower, user.role) }}</td>
+                    <td>
+                        {% if user.role|lower == 'employee' %}
+                        {% if user.employee_id and user.employee_id in employee_branch_names %}
+                        <span>{{ employees_by_id[user.employee_id].full_name }}</span>
+                        <small class="linked-employee-branch">Филиал: {{ employee_branch_names[user.employee_id] or 'Неизвестный филиал' }}</small>
+                        {% else %}
+                        <span class="current-admin-label">Не выбран</span>
+                        {% endif %}
+                        <form class="user-employee-form" method="POST" action="{{ url_for('update_user_employee', user_id=user.id) }}">
+                            <label class="visually-hidden" for="employee-link-{{ user.id }}">Связанный сотрудник</label>
+                            <select id="employee-link-{{ user.id }}" name="employee_id">
+                                <option value="">Не выбран</option>
+                                {% for employee, branch_name in employee_options %}
+                                {% if employee_user_ids.get(employee.id) is none or employee_user_ids.get(employee.id) == user.id %}
+                                <option value="{{ employee.id }}" {{ 'selected' if user.employee_id == employee.id else '' }}>
+                                    {{ employee.full_name }} — Филиал: {{ branch_name or 'Неизвестный филиал' }}
+                                </option>
+                                {% endif %}
+                                {% endfor %}
+                            </select>
+                            <button class="toggle-btn primary" type="submit">Сохранить</button>
+                        </form>
+                        {% else %}
+                        <span class="current-admin-label">—</span>
+                        {% endif %}
+                    </td>
                     <td>
                         <span class="status-badge {{ 'active' if user.is_active else 'inactive' }}">
                             {{ 'Активен' if user.is_active else 'Неактивен' }}

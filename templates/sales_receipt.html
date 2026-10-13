@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Чек продажи №{{ sale.id }} | BMS{% endblock %}
+{% block page_title %}Чек продажи №{{ sale.id }}{% endblock %}
+
+{% block content %}
+<section class="receipt-page">
+    <div class="receipt-actions">
+        <a class="secondary-btn" href="{{ url_for('sales_history') }}">К истории продаж</a>
+        <a class="secondary-btn" href="{{ url_for('sales') }}">К кассе</a>
+        <button class="primary-btn" type="button" onclick="window.print()">Печать чека</button>
+    </div>
+
+    <article class="panel-card receipt-card">
+        <header class="receipt-heading">
+            <div>
+                <p class="eyebrow">Цифровой чек</p>
+                <h2>Продажа №{{ sale.id }}</h2>
+            </div>
+            <strong class="receipt-total">{{ '%.2f'|format(sale.total_amount) }}</strong>
+        </header>
+
+        <dl class="receipt-details">
+            <div><dt>Дата и время</dt><dd>{{ sale.created_at.strftime('%d.%m.%Y %H:%M:%S') }}</dd></div>
+            <div><dt>Филиал</dt><dd>{{ branch.name if branch else 'Не указан' }}</dd></div>
+            <div><dt>Продавец</dt><dd>{{ seller.username if seller else 'Не указан' }}</dd></div>
+            <div><dt>Клиент</dt><dd>{{ customer.name if customer else 'Без клиента' }}</dd></div>
+            <div><dt>Способ оплаты</dt><dd>{{ {'cash': 'Наличные', 'card': 'Карта'}.get(sale.payment_method, sale.payment_method) }}</dd></div>
+        </dl>
+
+        <div class="table-wrap receipt-items-wrap">
+            <table class="receipt-items-table">
+                <thead>
+                    <tr>
+                        <th>Товар</th>
+                        <th>Артикул (SKU)</th>
+                        <th>Кол-во</th>
+                        <th>Цена за шт.</th>
+                        <th>Подытог</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item, product in sale_items %}
+                    <tr>
+                        <td>{{ product.name }}</td>
+                        <td>{{ product.sku }}</td>
+                        <td>{{ item.quantity }}</td>
+                        <td>{{ '%.2f'|format(item.unit_price) }}</td>
+                        <td>{{ '%.2f'|format(item.unit_price * item.quantity) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <dl class="receipt-totals">
+            {% if sale.discount is not none and sale.discount != 0 %}
+            <div><dt>Скидка</dt><dd>{{ '%.2f'|format(sale.discount) }}</dd></div>
+            {% endif %}
+            <div class="receipt-final-total"><dt>Итого</dt><dd>{{ '%.2f'|format(sale.total_amount) }}</dd></div>
+        </dl>
+    </article>
+</section>
+{% endblock %}

@@ -28,15 +28,21 @@
             </select>
         </div>
 
+        {% if (session.get('role') or '').lower() in ['admin', 'manager'] %}
         <div class="toolbar-field">
-            <label for="branch-filter">Филиал</label>
-            <select id="branch-filter" name="branch_id">
-                <option value="">Все филиалы</option>
+            <label for="branch-filter">Остатки филиала</label>
+            <select id="branch-filter" name="branch_id" {% if branches %}required{% endif %}>
                 {% for branch in branches %}
-                <option value="{{ branch.id }}" {{ 'selected' if branch_filter == branch.id|string else '' }}>{{ branch.name }}</option>
+                <option value="{{ branch.id }}" {{ 'selected' if selected_branch and selected_branch.id == branch.id else '' }}>{{ branch.name }}</option>
                 {% endfor %}
             </select>
         </div>
+        {% elif selected_branch %}
+        <div class="toolbar-field">
+            <span>Остатки филиала</span>
+            <strong>{{ selected_branch.name }}</strong>
+        </div>
+        {% endif %}
 
         <div class="toolbar-field">
             <label for="sort-filter">Сортировка</label>
@@ -72,19 +78,22 @@
                 </tr>
             </thead>
             <tbody>
-                {% for product, category_name, branch_name in product_rows %}
-                {% set low_stock = product.stock_quantity <= product.minimum_stock %}
+                {% for product, category_name, inventory in product_rows %}
                 <tr>
                     <td>{{ product.name }}</td>
                     <td>{{ product.sku }}</td>
                     <td>{{ category_name }}</td>
-                    <td>{{ branch_name }}</td>
+                    <td>{{ selected_branch.name if selected_branch else '—' }}</td>
                     <td>{{ '%.2f'|format(product.selling_price) }}</td>
-                    <td>{{ product.stock_quantity }}</td>
+                    <td>{{ inventory.stock_quantity ~ ' шт.' if inventory else 'Не назначен' }}</td>
                     <td>
-                        <span class="status-badge {{ 'low-stock' if low_stock else 'active' }}">
-                            {{ 'Мало на складе' if low_stock else 'В наличии' }}
+                        {% if inventory %}
+                        <span class="status-badge {{ 'low-stock' if inventory.stock_quantity <= inventory.minimum_stock else 'active' }}">
+                            {{ 'Мало на складе' if inventory.stock_quantity <= inventory.minimum_stock else 'В наличии' }}
                         </span>
+                        {% else %}
+                        <span class="status-badge">Не назначен</span>
+                        {% endif %}
                     </td>
                     <td>
                         <div class="row-actions">

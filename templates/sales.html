@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block title %}Продажи | BMS{% endblock %}
+{% block page_title %}Продажи{% endblock %}
+
+{% block content %}
+<section class="pos-page"
+    data-checkout-url="{{ url_for('sales_checkout') }}"
+    {% if can_select_branch and selected_branch %}data-branch-id="{{ selected_branch.id }}"{% endif %}>
+    <div class="pos-feedback" id="pos-feedback" role="status" aria-live="polite" hidden></div>
+    <div class="sales-page-actions">
+        <a class="secondary-btn" href="{{ url_for('sales_history') }}">История продаж</a>
+    </div>
+    {% if can_select_branch and branches %}
+    <form class="pos-branch-toolbar" method="GET" action="{{ url_for('sales') }}">
+        <label for="pos-branch">Текущий филиал</label>
+        <select id="pos-branch" name="branch_id" onchange="this.form.submit()">
+            {% for branch in branches %}
+            <option value="{{ branch.id }}" {{ 'selected' if selected_branch and selected_branch.id == branch.id else '' }}>{{ branch.name }}</option>
+            {% endfor %}
+        </select>
+        <noscript><button class="primary-btn" type="submit">Выбрать</button></noscript>
+    </form>
+    {% elif selected_branch %}
+    <div class="pos-current-branch">
+        <span>Текущий филиал</span>
+        <strong>{{ selected_branch.name }}</strong>
+    </div>
+    {% endif %}
+
+    {% if branch_error %}
+    <section class="panel-card pos-message-card" role="status">
+        <h2>Касса недоступна</h2>
+        <p>{{ branch_error }}</p>
+    </section>
+    {% elif selected_branch %}
+    <div class="pos-layout">
+        <section class="panel-card pos-catalog" aria-labelledby="pos-catalog-title">
+            <div class="pos-section-heading">
+                <div>
+                    <p class="eyebrow">Касса</p>
+                    <h2 id="pos-catalog-title">Доступные товары</h2>
+                </div>
+                <span class="pos-product-count">{{ branch_inventory_rows|length }} товаров</span>
+            </div>
+
+            <label class="pos-search" for="pos-search">
+                <span>Поиск товара</span>
+                <input id="pos-search" type="search" placeholder="Название или артикул" autocomplete="off">
+            </label>
+
+            {% if branch_inventory_rows %}
+            <div class="pos-product-list" id="pos-product-list">
+                {% for inventory, product in branch_inventory_rows %}
+                <article class="pos-product-card" data-product-card data-search="{{ product.name }} {{ product.sku }}">
+                    <div class="pos-product-main">
+                        <div>
+                            <h3>{{ product.name }}</h3>
+                            <p class="pos-sku">Артикул: {{ product.sku }}</p>
+                        </div>
+                        <strong class="pos-product-price">{{ '%.2f'|format(product.selling_price) }}</strong>
+                    </div>
+                    <div class="pos-product-footer">
+                        <span class="pos-stock {{ 'is-empty' if inventory.stock_quantity == 0 else '' }}">
+                            В наличии: <span data-stock-display>{{ inventory.stock_quantity }}</span>
+                        </span>
+                        <button
+                            class="pos-add-button"
+                            type="button"
+                            data-add-product
+                            data-id="{{ product.id }}"
+                            data-name="{{ product.name }}"
+                            data-sku="{{ product.sku }}"
+                            data-price="{{ product.selling_price }}"
+                            data-stock="{{ inventory.stock_quantity }}"
+                            {{ 'disabled' if inventory.stock_quantity <= 0 else '' }}>
+                            Добавить
+                        </button>
+                    </div>
+                </article>
+                {% endfor %}
+            </div>
+            <p class="pos-no-results" id="pos-no-results" hidden>Товары по запросу не найдены.</p>
+            {% else %}
+            <div class="pos-empty-state">
+                <h3>В филиале пока нет товаров</h3>
+                <p>Назначьте товары филиалу в разделе «Склад», чтобы начать работу с кассой.</p>
+            </div>
+            {% endif %}
+        </section>
+
+        <aside class="panel-card pos-cart" aria-labelledby="pos-cart-title">
+            <div class="pos-section-heading">
+                <div>
+                    <p class="eyebrow">Текущая операция</p>
+                    <h2 id="pos-cart-title">Корзина</h2>
+                </div>
+                <button class="pos-clear-button" id="pos-clear-cart" type="button" disabled>Очистить корзину</button>
+            </div>
+
+            <div class="pos-cart-empty" id="pos-cart-empty">
+                <p>Корзина пуста</p>
+                <span>Добавьте товары из списка, чтобы подготовить продажу.</span>
+            </div>
+            <div class="pos-cart-lines" id="pos-cart-lines" aria-live="polite"></div>
+
+            <div class="pos-cart-total">
+                <span>Итого</span>
+                <strong id="pos-total">0.00</strong>
+            </div>
+
+            <div class="pos-checkout-options">
+                <label for="pos-payment">Способ оплаты</label>
+                <select id="pos-payment">
+                    <option value="cash">Наличные</option>
+                    <option value="card">Карта</option>
+                </select>
+
+                <label for="pos-customer">Клиент</label>
+                <select id="pos-customer">
+                    <option value="">Без клиента</option>
+                    {% for customer in customers %}
+                    <option value="{{ customer.id }}">{{ customer.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <button class="pos-checkout-button" id="pos-checkout" type="button" disabled>Оформить продажу</button>
+            <p class="pos-checkout-note">Проверьте состав и количество товаров перед подтверждением.</p>
+        </aside>
+    </div>
+    {% endif %}
+</section>
+<script src="{{ url_for('static', filename='js/pos.js') }}" defer></script>
+{% endblock %}
