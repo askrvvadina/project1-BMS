@@ -1,14 +1,30 @@
 import os
-from datetime import date, datetime, timedelta
+import re
+import hmac
+import hashlib
+import ipaddress
+import secrets
+import threading
+import time
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from functools import wraps
+from urllib.parse import urlsplit
 
 import click
-from flask import Flask, abort, current_app, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, abort, current_app, flash, jsonify, make_response, redirect, render_template, request, session, url_for
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import and_, or_, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from werkzeug.security import check_password_hash, generate_password_hash
+
+from app.guest_loyalty import (
+    create_claim_token,
+    hash_claim_token,
+    make_claim_qr_data_uri,
+)
+from app.loyalty import calculate_earned_points, calculate_redemption_limit
+from app.financial import calculate_financial_summary
 
 
 db = SQLAlchemy()
@@ -52,11 +68,93 @@ def create_app(config=None):
     app = Flask(__name__, template_folder="../templates", static_folder="../static")
 
     app.config["SECRET_KEY"] = os.environ.get("BMS_SECRET_KEY", "dev-secret-key-change-me")
-    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///bms.db"
+    app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
+        "BMS_DATABASE_URI",
+        "sqlite:///bms.db",
+    )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    app.config["PUBLIC_BASE_URL"] = os.environ.get("BMS_PUBLIC_BASE_URL")
+    app.config["LOYALTY_CLAIM_TTL_DAYS"] = int(
+        os.environ.get("BMS_LOYALTY_CLAIM_TTL_DAYS", "7")
+    )
+    app.config["LOYALTY_CLAIM_RATE_LIMIT"] = 20
+    app.config["LOYALTY_CLAIM_RATE_WINDOW"] = 60
+    app.config["CUSTOMER_AUTH_RATE_LIMIT"] = 5
+    app.config["CUSTOMER_AUTH_RATE_WINDOW"] = 900
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=14)
 
     if config is not None:
         app.config.update(config)
+
+    public_base_url = app.config["PUBLIC_BASE_URL"]
+    if public_base_url:
+        if not isinstance(public_base_url, str):
+            raise ValueError("PUBLIC_BASE_URL must be an HTTPS URL.")
+        parsed_public_url = urlsplit(public_base_url)
+        hostname = (parsed_public_url.hostname or "").lower()
+        try:
+            parsed_public_url.port
+        except ValueError as error:
+            raise ValueError("PUBLIC_BASE_URL must be a valid HTTPS URL.") from error
+        try:
+            parsed_ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            parsed_ip = None
+        if (
+            parsed_public_url.scheme.lower() != "https"
+            or not parsed_public_url.netloc
+            or not hostname
+            or parsed_public_url.username is not None
+            or parsed_public_url.password is not None
+            or parsed_public_url.path not in {"", "/"}
+            or parsed_public_url.query
+            or parsed_public_url.fragment
+            or hostname == "localhost"
+            or hostname.endswith(".localhost")
+            or (
+                parsed_ip is not None
+                and (parsed_ip.is_loopback or parsed_ip.is_unspecified)
+            )
+        ):
+            raise ValueError(
+                "PUBLIC_BASE_URL must be a reachable HTTPS URL, not localhost."
+            )
+        app.config["PUBLIC_BASE_URL"] = public_base_url.rstrip("/")
+
+    if config is None or "SESSION_COOKIE_SECURE" not in config:
+        secure_cookie_setting = os.environ.get("BMS_SESSION_COOKIE_SECURE")
+        if secure_cookie_setting is None:
+            app.config["SESSION_COOKIE_SECURE"] = (
+                bool(app.config["PUBLIC_BASE_URL"]) or not app.config["TESTING"]
+            )
+        elif secure_cookie_setting.strip().lower() in {"1", "true", "yes", "on"}:
+            app.config["SESSION_COOKIE_SECURE"] = True
+        elif secure_cookie_setting.strip().lower() in {"0", "false", "no", "off"}:
+            app.config["SESSION_COOKIE_SECURE"] = False
+        else:
+            raise ValueError("BMS_SESSION_COOKIE_SECURE must be a boolean value.")
+    if (
+        app.config["PUBLIC_BASE_URL"]
+        and not app.config["SESSION_COOKIE_SECURE"]
+        and not app.config["TESTING"]
+    ):
+        raise ValueError(
+            "SESSION_COOKIE_SECURE cannot be disabled when PUBLIC_BASE_URL is set."
+        )
+
+    claim_ttl_days = app.config["LOYALTY_CLAIM_TTL_DAYS"]
+    if type(claim_ttl_days) is not int or claim_ttl_days < 1:
+        raise ValueError("LOYALTY_CLAIM_TTL_DAYS must be a positive integer.")
+    for setting in (
+        "LOYALTY_CLAIM_RATE_LIMIT",
+        "LOYALTY_CLAIM_RATE_WINDOW",
+        "CUSTOMER_AUTH_RATE_LIMIT",
+        "CUSTOMER_AUTH_RATE_WINDOW",
+    ):
+        if type(app.config[setting]) is not int or app.config[setting] < 1:
+            raise ValueError(f"{setting} must be a positive integer.")
 
     db.init_app(app)
 
@@ -65,6 +163,115 @@ def create_app(config=None):
         return render_template("403.html", requested_path=request.path), 403
 
     from app import models
+
+    dummy_customer_password_hash = generate_password_hash(
+        secrets.token_urlsafe(32)
+    )
+    claim_rate_buckets = {}
+    claim_rate_lock = threading.Lock()
+    customer_auth_rate_buckets = {}
+    customer_auth_rate_lock = threading.Lock()
+
+    class PortalClaimError(ValueError):
+        pass
+
+    def customer_auth_rate_limited(scope, value):
+        now = time.monotonic()
+        key = hashlib.sha256(
+            f"{request.remote_addr or 'unknown'}:{scope}:{value}".encode("utf-8")
+        ).hexdigest()
+        window = app.config["CUSTOMER_AUTH_RATE_WINDOW"]
+        with customer_auth_rate_lock:
+            if key not in customer_auth_rate_buckets and len(customer_auth_rate_buckets) >= 10000:
+                stale_before = now - window
+                for old_key, (started_at, _) in tuple(customer_auth_rate_buckets.items()):
+                    if started_at < stale_before:
+                        del customer_auth_rate_buckets[old_key]
+                if len(customer_auth_rate_buckets) >= 10000:
+                    return True
+            started_at, attempts = customer_auth_rate_buckets.get(key, (now, 0))
+            if now - started_at >= window:
+                started_at, attempts = now, 0
+            if attempts >= app.config["CUSTOMER_AUTH_RATE_LIMIT"]:
+                return True
+            customer_auth_rate_buckets[key] = (started_at, attempts + 1)
+        return False
+
+    def normalize_customer_phone(value):
+        if not isinstance(value, str) or len(value) > 30:
+            return None
+        if re.fullmatch(r"\+?[\s(]*[0-9][0-9\s().-]*[0-9]", value) is None:
+            return None
+        digits = re.sub(r"\D", "", value)
+        return digits if 7 <= len(digits) <= 15 else None
+
+    def find_customer_by_phone(phone_digits):
+        for customer_id, phone in models.Customer.query.with_entities(
+            models.Customer.id,
+            models.Customer.phone,
+        ).filter(models.Customer.phone.isnot(None)):
+            if phone and re.sub(r"\D", "", phone) == phone_digits:
+                return db.session.get(models.Customer, customer_id)
+        return None
+
+    def portal_csrf_token():
+        token = session.get("portal_csrf_token")
+        if not isinstance(token, str):
+            token = secrets.token_urlsafe(32)
+            session["portal_csrf_token"] = token
+        return token
+
+    def valid_portal_csrf():
+        expected = session.get("portal_csrf_token")
+        submitted = request.form.get("csrf_token", "")
+        return (
+            isinstance(expected, str)
+            and isinstance(submitted, str)
+            and hmac.compare_digest(expected, submitted)
+        )
+
+    def customer_login_required(view):
+        @wraps(view)
+        def wrapped_view(*args, **kwargs):
+            customer_id = session.get("customer_id")
+            if type(customer_id) is not int or customer_id < 1:
+                return redirect(url_for("customer_portal_login"))
+            return view(*args, **kwargs)
+
+        return wrapped_view
+
+    @app.context_processor
+    def customer_portal_template_context():
+        return {"portal_csrf_token": portal_csrf_token}
+
+    def claim_validation_rate_limited():
+        now = time.monotonic()
+        client_key = request.remote_addr or "unknown"
+        rate_limit = app.config["LOYALTY_CLAIM_RATE_LIMIT"]
+        rate_window = app.config["LOYALTY_CLAIM_RATE_WINDOW"]
+        with claim_rate_lock:
+            if client_key not in claim_rate_buckets and len(claim_rate_buckets) >= 10000:
+                stale_before = now - rate_window
+                for key, (start, _) in tuple(claim_rate_buckets.items()):
+                    if start < stale_before:
+                        del claim_rate_buckets[key]
+                if len(claim_rate_buckets) >= 10000:
+                    return True
+            bucket_start, attempts = claim_rate_buckets.get(
+                client_key,
+                (now, 0),
+            )
+            if now - bucket_start >= rate_window:
+                bucket_start, attempts = now, 0
+            if attempts >= rate_limit:
+                return True
+            claim_rate_buckets[client_key] = (bucket_start, attempts + 1)
+            if len(claim_rate_buckets) > 10000:
+                stale_before = now - rate_window
+                for key, (start, _) in tuple(claim_rate_buckets.items()):
+                    if start < stale_before:
+                        del claim_rate_buckets[key]
+        return False
 
     def resolve_management_branch(explicit_branch_id=None):
         branches = models.Branch.query.order_by(models.Branch.name.asc()).all()
@@ -273,6 +480,78 @@ def create_app(config=None):
             product_data["stock_quantity"] = quantities["stock_quantity"]
 
         return product_data
+
+    def validate_customer_form(form_data, current_customer_id=None):
+        errors = []
+        name = form_data["name"]
+        phone = form_data["phone"]
+        email = form_data["email"]
+
+        if not name:
+            errors.append("Укажите имя клиента.")
+        elif len(name) > 120:
+            errors.append("Имя клиента не должно превышать 120 символов.")
+
+        phone_digits = re.sub(r"\D", "", phone)
+        if not phone:
+            errors.append("Укажите номер телефона.")
+        elif len(phone) > 30 or not re.fullmatch(
+            r"\+?[\s(]*[0-9][0-9\s().-]*[0-9]",
+            phone,
+        ):
+            errors.append("Укажите корректный номер телефона.")
+        elif not 7 <= len(phone_digits) <= 15:
+            errors.append("Номер телефона должен содержать от 7 до 15 цифр.")
+
+        if email:
+            email_pattern = (
+                r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+                r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+                r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+"
+            )
+            if len(email) > 120 or re.fullmatch(email_pattern, email) is None:
+                errors.append("Укажите корректный адрес электронной почты.")
+
+        current_customer = (
+            db.session.get(models.Customer, current_customer_id)
+            if current_customer_id is not None
+            else None
+        )
+        current_phone_is_unchanged = (
+            current_customer is not None
+            and current_customer.phone is not None
+            and re.sub(r"\D", "", current_customer.phone) == phone_digits
+        )
+        if phone and not errors and not current_phone_is_unchanged:
+            normalized_phone = phone_digits
+            existing_customers = models.Customer.query.with_entities(
+                models.Customer.id,
+                models.Customer.phone,
+            ).filter(models.Customer.phone.isnot(None))
+            for customer_id, existing_phone in existing_customers:
+                if customer_id == current_customer_id or not existing_phone:
+                    continue
+                existing_digits = re.sub(r"\D", "", existing_phone)
+                if existing_digits and existing_digits == normalized_phone:
+                    errors.append(
+                        "Клиент с таким номером телефона уже существует."
+                    )
+                    break
+
+        if errors:
+            for error in errors:
+                flash(error, "error")
+            return None
+
+        return {
+            "name": name,
+            "phone": (
+                current_customer.phone
+                if current_phone_is_unchanged
+                else f"+{phone_digits}"
+            ),
+            "email": email or None,
+        }
 
     @app.cli.command("create-admin")
     def create_admin():
@@ -1791,6 +2070,100 @@ def create_app(config=None):
             can_select_branch=role in {"admin", "manager"},
         )
 
+    @app.route("/sales/loyalty-quote", methods=["POST"])
+    @login_required
+    @role_required("admin", "manager", "employee")
+    def sales_loyalty_quote():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict):
+            return jsonify(error="Некорректный запрос расчёта бонусов."), 400
+        customer_id = payload.get("customer_id")
+        items = payload.get("items")
+        if (
+            type(customer_id) is not int
+            or customer_id < 1
+            or not isinstance(items, list)
+            or not items
+        ):
+            return jsonify(error="Выберите клиента и добавьте товары в корзину."), 400
+
+        user = db.session.get(models.User, session.get("user_id"))
+        customer = db.session.get(models.Customer, customer_id)
+        if user is None or not user.is_active:
+            return jsonify(error="Учётная запись недоступна. Войдите снова."), 401
+        if customer is None:
+            return jsonify(error="Выбранный клиент не найден."), 400
+
+        role = (user.role or "").lower()
+        if role == "employee":
+            branch_id = models.resolve_employee_branch_id(user)
+        elif role in {"admin", "manager"}:
+            branch_id = payload.get("branch_id")
+            if type(branch_id) is not int or branch_id < 1:
+                branch_id = None
+        else:
+            return jsonify(error="У вас нет доступа к кассе."), 403
+        branch = db.session.get(models.Branch, branch_id) if branch_id else None
+        if branch is None:
+            return jsonify(error="Выбранный филиал не найден."), 400
+
+        product_quantities = {}
+        for item in items:
+            if not isinstance(item, dict):
+                return jsonify(error="Некорректный состав корзины."), 400
+            product_id = item.get("product_id")
+            quantity = item.get("quantity")
+            if (
+                type(product_id) is not int
+                or product_id < 1
+                or type(quantity) is not int
+                or quantity <= 0
+                or product_id in product_quantities
+            ):
+                return jsonify(error="Некорректный состав корзины."), 400
+            product_quantities[product_id] = quantity
+
+        products = {
+            product.id: product
+            for product in models.Product.query.filter(
+                models.Product.id.in_(product_quantities)
+            ).all()
+        }
+        inventory = {
+            row.product_id: row
+            for row in models.BranchInventory.query.filter(
+                models.BranchInventory.branch_id == branch.id,
+                models.BranchInventory.product_id.in_(product_quantities),
+            ).all()
+        }
+        if len(products) != len(product_quantities) or len(inventory) != len(product_quantities):
+            return jsonify(error="Один из товаров недоступен в выбранном филиале."), 400
+
+        subtotal = Decimal("0.00")
+        for product_id, quantity in product_quantities.items():
+            product = products[product_id]
+            if inventory[product_id].stock_quantity < quantity:
+                return jsonify(error=f"Недостаточно товара «{product.name}» на складе."), 400
+            if (
+                not isinstance(product.selling_price, Decimal)
+                or not product.selling_price.is_finite()
+                or product.selling_price < 0
+            ):
+                return jsonify(error=f"Для товара «{product.name}» указана некорректная цена."), 400
+            subtotal += product.selling_price * quantity
+
+        balance = (
+            db.session.query(
+                db.func.coalesce(db.func.sum(models.LoyaltyTransaction.points), 0)
+            )
+            .filter_by(customer_id=customer.id)
+            .scalar()
+        )
+        return jsonify(
+            available_points=int(balance or 0),
+            maximum_redemption=calculate_redemption_limit(subtotal, int(balance or 0)),
+        )
+
     @app.route("/sales/history")
     @login_required
     @role_required("admin", "manager", "employee")
@@ -1937,6 +2310,455 @@ def create_app(config=None):
             total_sales=total_sales,
         )
 
+    @app.get("/loyalty/claim")
+    def guest_loyalty_claim_landing():
+        response = make_response(render_template("loyalty_claim.html"))
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    @app.post("/loyalty/claim/validate")
+    def guest_loyalty_claim_validate():
+        if claim_validation_rate_limited():
+            response = jsonify(
+                status="rate_limited",
+                message="Слишком много попыток. Повторите позже.",
+            )
+            response.status_code = 429
+            response.headers["Retry-After"] = str(
+                app.config["LOYALTY_CLAIM_RATE_WINDOW"]
+            )
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
+        payload = request.get_json(silent=True)
+        token = payload.get("token") if isinstance(payload, dict) else None
+        if not isinstance(token, str) or re.fullmatch(r"[A-Za-z0-9_-]{43}", token) is None:
+            response = jsonify(
+                status="invalid",
+                message="Ссылка недействительна или срок её действия истёк.",
+            )
+            response.status_code = 404
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
+        token_hash = hash_claim_token(token)
+        claim = models.GuestLoyaltyClaim.query.filter_by(
+            token_hash=token_hash
+        ).first()
+        if claim is None or not hmac.compare_digest(claim.token_hash, token_hash):
+            response = jsonify(
+                status="invalid",
+                message="Ссылка недействительна или срок её действия истёк.",
+            )
+            response.status_code = 404
+        elif claim.claimed_at is not None:
+            response = jsonify(
+                status="claimed",
+                message="Эта ссылка уже использована.",
+            )
+            response.status_code = 409
+        elif claim.expires_at <= datetime.now(timezone.utc).replace(tzinfo=None):
+            response = jsonify(
+                status="expired",
+                message="Срок действия ссылки истёк.",
+            )
+            response.status_code = 410
+        else:
+            sale = db.session.get(models.Sale, claim.sale_id)
+            if (
+                sale is None
+                or sale.customer_id is not None
+                or sale.branch_id != claim.branch_id
+                or models.LoyaltyTransaction.query.filter_by(
+                    sale_id=claim.sale_id
+                ).first() is not None
+            ):
+                response = jsonify(
+                    status="invalid",
+                    message="Ссылка недействительна или срок её действия истёк.",
+                )
+                response.status_code = 404
+            elif claim.points <= 0:
+                response = jsonify(
+                    status="no_points",
+                    message="За эту покупку бонусные баллы не начисляются.",
+                )
+            else:
+                response = jsonify(
+                    status="available",
+                    points=claim.points,
+                    message=(
+                        f"За покупку можно получить {claim.points} бонусных баллов. "
+                        "Для получения баллов потребуется вход или регистрация."
+                    ),
+                    login_url=url_for("customer_portal_login"),
+                    register_url=url_for("customer_portal_register"),
+                )
+                remaining_seconds = max(
+                    1,
+                    int((claim.expires_at - datetime.now(timezone.utc).replace(tzinfo=None)).total_seconds()),
+                )
+                response.set_cookie(
+                    "bms_pending_loyalty_claim",
+                    token,
+                    max_age=remaining_seconds,
+                    secure=True,
+                    httponly=True,
+                    samesite="Lax",
+                    path="/portal",
+                )
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    @app.route("/portal/register", methods=["GET", "POST"])
+    def customer_portal_register():
+        if session.get("customer_id"):
+            return redirect(url_for("customer_portal_dashboard"))
+
+        if request.method == "POST":
+            if not valid_portal_csrf():
+                abort(400)
+            phone_input = request.form.get("phone", "").strip()
+            phone_digits = normalize_customer_phone(phone_input)
+            rate_value = phone_digits or hashlib.sha256(
+                phone_input[:30].encode("utf-8")
+            ).hexdigest()
+            if customer_auth_rate_limited("register", rate_value):
+                return render_template("customer_portal_register.html"), 429
+
+            name = request.form.get("name", "").strip()
+            password = request.form.get("password", "")
+            confirmation = request.form.get("confirm_password", "")
+            if not name or len(name) > 120:
+                flash("Укажите имя длиной не более 120 символов.", "error")
+            elif phone_digits is None:
+                flash("Укажите корректный номер телефона (от 7 до 15 цифр).", "error")
+            elif len(password) < MIN_PASSWORD_LENGTH or len(password) > 128:
+                flash(
+                    f"Пароль должен содержать от {MIN_PASSWORD_LENGTH} до 128 символов.",
+                    "error",
+                )
+            elif password != confirmation:
+                flash("Пароли не совпадают.", "error")
+            else:
+                try:
+                    with db.session.begin():
+                        if db.engine.dialect.name == "sqlite":
+                            db.session.execute(text("BEGIN IMMEDIATE"))
+                        existing_customer = find_customer_by_phone(phone_digits)
+                        if existing_customer is not None:
+                            raise ValueError(
+                                "Этот номер уже есть в базе клиентов. "
+                                "Обратитесь к сотруднику магазина для подтверждения и подключения аккаунта."
+                            )
+                        customer = models.Customer(
+                            name=name,
+                            phone=f"+{phone_digits}",
+                            registration_date=date.today(),
+                            password_hash=generate_password_hash(password),
+                        )
+                        db.session.add(customer)
+                        db.session.flush()
+                except ValueError as error:
+                    db.session.rollback()
+                    flash(
+                        "Если аккаунт можно создать, регистрация завершена. "
+                        "Если номер уже используется, обратитесь в магазин для безопасного подключения.",
+                        "success",
+                    )
+                    return redirect(url_for("customer_portal_login"))
+                except IntegrityError:
+                    db.session.rollback()
+                    flash(
+                        "Если аккаунт можно создать, регистрация завершена. "
+                        "Если номер уже используется, обратитесь в магазин для безопасного подключения.",
+                        "success",
+                    )
+                    return redirect(url_for("customer_portal_login"))
+                else:
+                    flash(
+                        "Если аккаунт можно создать, регистрация завершена. "
+                        "Если номер уже используется, обратитесь в магазин для безопасного подключения.",
+                        "success",
+                    )
+                    return redirect(url_for("customer_portal_login"))
+
+        return render_template("customer_portal_register.html")
+
+    @app.route("/portal/login", methods=["GET", "POST"])
+    def customer_portal_login():
+        if session.get("customer_id"):
+            return redirect(url_for("customer_portal_claim"))
+
+        if request.method == "POST":
+            if not valid_portal_csrf():
+                abort(400)
+            phone_input = request.form.get("phone", "").strip()
+            phone_digits = normalize_customer_phone(phone_input)
+            rate_value = phone_digits or hashlib.sha256(
+                phone_input[:30].encode("utf-8")
+            ).hexdigest()
+            if customer_auth_rate_limited("login", rate_value):
+                return render_template("customer_portal_login.html"), 429
+
+            password = request.form.get("password", "")
+            customer = (
+                find_customer_by_phone(phone_digits)
+                if phone_digits is not None and len(password) <= 128
+                else None
+            )
+            password_hash = (
+                customer.password_hash
+                if customer is not None and customer.password_hash
+                else dummy_customer_password_hash
+            )
+            password_matches = (
+                check_password_hash(password_hash, password)
+                if len(password) <= 128
+                else False
+            )
+            if (
+                customer is None
+                or not customer.password_hash
+                or not password_matches
+            ):
+                flash("Неверный номер телефона или пароль.", "error")
+            else:
+                session.clear()
+                session.permanent = True
+                session["customer_id"] = customer.id
+                session["portal_csrf_token"] = secrets.token_urlsafe(32)
+                return redirect(url_for("customer_portal_claim"))
+
+        return render_template("customer_portal_login.html")
+
+    @app.post("/portal/logout")
+    @customer_login_required
+    def customer_portal_logout():
+        if not valid_portal_csrf():
+            abort(400)
+        session.clear()
+        response = redirect(url_for("customer_portal_login"))
+        response.delete_cookie(
+            "bms_pending_loyalty_claim",
+            path="/portal",
+            secure=True,
+            httponly=True,
+            samesite="Lax",
+        )
+        return response
+
+    @app.get("/portal")
+    @customer_login_required
+    def customer_portal_dashboard():
+        customer = db.session.get(models.Customer, session["customer_id"])
+        if customer is None or not customer.password_hash:
+            session.clear()
+            return redirect(url_for("customer_portal_login"))
+
+        transactions = (
+            models.LoyaltyTransaction.query.filter_by(customer_id=customer.id)
+            .order_by(models.LoyaltyTransaction.created_at.desc(), models.LoyaltyTransaction.id.desc())
+            .limit(10)
+            .all()
+        )
+        balance = (
+            db.session.query(
+                db.func.coalesce(db.func.sum(models.LoyaltyTransaction.points), 0)
+            )
+            .filter_by(customer_id=customer.id)
+            .scalar()
+        )
+        earned_total = (
+            db.session.query(
+                db.func.coalesce(db.func.sum(models.LoyaltyTransaction.points), 0)
+            )
+            .filter_by(customer_id=customer.id, transaction_type="earn")
+            .scalar()
+        )
+        redeemed_total = (
+            db.session.query(
+                db.func.coalesce(db.func.sum(-models.LoyaltyTransaction.points), 0)
+            )
+            .filter_by(customer_id=customer.id, transaction_type="redeem")
+            .scalar()
+        )
+        return render_template(
+            "customer_portal_dashboard.html",
+            customer=customer,
+            transactions=transactions,
+            balance=balance,
+            earned_total=earned_total,
+            redeemed_total=redeemed_total,
+        )
+
+    @app.route("/portal/claim", methods=["GET", "POST"])
+    @customer_login_required
+    def customer_portal_claim():
+        customer_id = session["customer_id"]
+        token = request.cookies.get("bms_pending_loyalty_claim", "")
+        if re.fullmatch(r"[A-Za-z0-9_-]{43}", token) is None:
+            return redirect(url_for("customer_portal_dashboard"))
+        token_hash = hash_claim_token(token)
+
+        if request.method == "GET":
+            customer = db.session.get(models.Customer, customer_id)
+            if customer is None or not customer.password_hash:
+                session.clear()
+                return redirect(url_for("customer_portal_login"))
+            claim = models.GuestLoyaltyClaim.query.filter_by(
+                token_hash=token_hash
+            ).first()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            if (
+                claim is None
+                or not hmac.compare_digest(claim.token_hash, token_hash)
+                or claim.claimed_at is not None
+                or claim.expires_at <= now
+                or claim.points <= 0
+            ):
+                return render_template(
+                    "customer_portal_claim.html",
+                    claim=None,
+                    message="Ссылка недействительна, уже использована или срок её действия истёк.",
+                ), 404
+            sale = db.session.get(models.Sale, claim.sale_id)
+            if (
+                sale is None
+                or sale.customer_id is not None
+                or sale.branch_id != claim.branch_id
+                or models.LoyaltyTransaction.query.filter_by(
+                    sale_id=claim.sale_id
+                ).first() is not None
+            ):
+                return render_template(
+                    "customer_portal_claim.html",
+                    claim=None,
+                    message="Эту покупку нельзя связать с бонусным аккаунтом.",
+                ), 409
+            return render_template(
+                "customer_portal_claim.html",
+                claim=claim,
+                message=None,
+            )
+
+        if not valid_portal_csrf():
+            abort(400)
+
+        try:
+            with db.session.begin():
+                if db.engine.dialect.name == "sqlite":
+                    db.session.execute(text("BEGIN IMMEDIATE"))
+                customer = db.session.get(models.Customer, customer_id)
+                claim = models.GuestLoyaltyClaim.query.filter_by(
+                    token_hash=token_hash
+                ).first()
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                if (
+                    customer is None
+                    or not customer.password_hash
+                    or claim is None
+                    or not hmac.compare_digest(claim.token_hash, token_hash)
+                    or claim.claimed_at is not None
+                    or claim.expires_at <= now
+                    or claim.points <= 0
+                ):
+                    raise PortalClaimError(
+                        "Ссылка недействительна, уже использована или срок её действия истёк."
+                    )
+                sale = db.session.get(models.Sale, claim.sale_id)
+                if (
+                    sale is None
+                    or sale.customer_id is not None
+                    or sale.branch_id != claim.branch_id
+                    or models.LoyaltyTransaction.query.filter_by(
+                        sale_id=claim.sale_id
+                    ).first() is not None
+                ):
+                    raise PortalClaimError(
+                        "Эту покупку нельзя связать с бонусным аккаунтом."
+                    )
+
+                consumed = db.session.execute(
+                    update(models.GuestLoyaltyClaim)
+                    .where(
+                        models.GuestLoyaltyClaim.id == claim.id,
+                        models.GuestLoyaltyClaim.claimed_at.is_(None),
+                        models.GuestLoyaltyClaim.expires_at > now,
+                    )
+                    .values(claimed_at=now)
+                    .execution_options(synchronize_session=False)
+                )
+                if consumed.rowcount != 1:
+                    raise PortalClaimError("Эта ссылка уже использована.")
+                linked_sale = db.session.execute(
+                    update(models.Sale)
+                    .where(
+                        models.Sale.id == sale.id,
+                        models.Sale.customer_id.is_(None),
+                        models.Sale.branch_id == claim.branch_id,
+                    )
+                    .values(customer_id=customer.id)
+                    .execution_options(synchronize_session=False)
+                )
+                if linked_sale.rowcount != 1:
+                    raise PortalClaimError(
+                        "Эту покупку нельзя связать с бонусным аккаунтом."
+                    )
+                db.session.add(
+                    models.LoyaltyTransaction(
+                        customer_id=customer.id,
+                        sale_id=sale.id,
+                        branch_id=claim.branch_id,
+                        transaction_type="earn",
+                        points=claim.points,
+                        operation_id=f"guest-sale-{sale.id}-earn",
+                    )
+                )
+                db.session.flush()
+        except PortalClaimError as error:
+            db.session.rollback()
+            return render_template(
+                "customer_portal_claim.html",
+                claim=None,
+                message=str(error),
+            ), 409
+        except (IntegrityError, OperationalError):
+            db.session.rollback()
+            current_app.logger.info(
+                "Customer loyalty claim conflicted for customer %s.",
+                customer_id,
+            )
+            return render_template(
+                "customer_portal_claim.html",
+                claim=None,
+                message="Не удалось получить баллы. Обновите страницу и проверьте баланс.",
+            ), 409
+        except SQLAlchemyError:
+            db.session.rollback()
+            current_app.logger.exception(
+                "Customer loyalty claim failed for customer %s.",
+                customer_id,
+            )
+            return render_template(
+                "customer_portal_claim.html",
+                claim=None,
+                message="Не удалось получить баллы. Попробуйте позже.",
+            ), 500
+
+        response = redirect(url_for("customer_portal_dashboard"))
+        response.delete_cookie(
+            "bms_pending_loyalty_claim",
+            path="/portal",
+            secure=True,
+            httponly=True,
+            samesite="Lax",
+        )
+        flash(f"Начислено бонусных баллов: {claim.points}.", "success")
+        return response
+
     @app.route("/sales/<int:sale_id>/receipt")
     @login_required
     @role_required("admin", "manager", "employee")
@@ -1976,14 +2798,76 @@ def create_app(config=None):
             .order_by(models.SaleItem.id.asc())
             .all()
         )
-        return render_template(
+        earned_points = 0
+        customer_balance = None
+        claim_qr_data_uri = None
+        claim_points = 0
+        claim_link_configured = bool(app.config["PUBLIC_BASE_URL"])
+        if customer is not None:
+            earned_transaction = models.LoyaltyTransaction.query.filter_by(
+                customer_id=customer.id,
+                sale_id=sale.id,
+                transaction_type="earn",
+            ).first()
+            if earned_transaction is not None:
+                earned_points = earned_transaction.points
+            customer_balance = (
+                db.session.query(
+                    db.func.coalesce(
+                        db.func.sum(models.LoyaltyTransaction.points),
+                        0,
+                    )
+                )
+                .filter_by(customer_id=customer.id)
+                .scalar()
+            )
+            redemption_transaction = models.LoyaltyTransaction.query.filter_by(
+                customer_id=customer.id,
+                sale_id=sale.id,
+                transaction_type="redeem",
+            ).first()
+            redeemed_points = (
+                abs(redemption_transaction.points)
+                if redemption_transaction is not None
+                else 0
+            )
+        elif claim_link_configured:
+            redeemed_points = 0
+            claim = models.GuestLoyaltyClaim.query.filter_by(
+                sale_id=sale.id
+            ).first()
+            token = request.cookies.get(f"bms_guest_claim_{sale.id}")
+            if (
+                claim is not None
+                and token is not None
+                and re.fullmatch(r"[A-Za-z0-9_-]{43}", token) is not None
+                and hmac.compare_digest(claim.token_hash, hash_claim_token(token))
+                and claim.claimed_at is None
+                and claim.expires_at > datetime.now(timezone.utc).replace(tzinfo=None)
+            ):
+                claim_points = claim.points
+                claim_url = (
+                    f"{app.config['PUBLIC_BASE_URL']}/loyalty/claim#{token}"
+                )
+                claim_qr_data_uri = make_claim_qr_data_uri(claim_url)
+        response = make_response(render_template(
             "sales_receipt.html",
             sale=sale,
             branch=branch,
             seller=seller,
             customer=customer,
             sale_items=sale_items,
-        )
+            earned_points=earned_points,
+            customer_balance=customer_balance,
+            claim_qr_data_uri=claim_qr_data_uri,
+            claim_points=claim_points,
+            claim_link_configured=claim_link_configured,
+            redeemed_points=redeemed_points if customer is not None else 0,
+            amount_paid=sale.total_amount - (sale.discount or Decimal("0.00")),
+        ))
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     @app.route("/sales/checkout", methods=["POST"])
     @login_required
@@ -2038,8 +2922,14 @@ def create_app(config=None):
             or customer_id > 0x7FFFFFFFFFFFFFFF
         ):
             return jsonify(error="Выбранный клиент не найден."), 400
+        redeem_points = payload.get("redeem_points", 0)
+        if type(redeem_points) is not int or redeem_points < 0:
+            return jsonify(error="Количество списываемых баллов должно быть целым неотрицательным числом."), 400
+        if customer_id is None and redeem_points:
+            return jsonify(error="Для списания бонусов необходимо выбрать клиента."), 400
 
         user_id = session.get("user_id")
+        claim_token = None
         try:
             with db.session.begin():
                 if db.engine.dialect.name == "sqlite":
@@ -2126,11 +3016,34 @@ def create_app(config=None):
                         (product, inventory, quantity, unit_price)
                     )
 
+                customer_balance = 0
+                if customer is not None:
+                    customer_balance = int(
+                        db.session.query(
+                            db.func.coalesce(
+                                db.func.sum(models.LoyaltyTransaction.points),
+                                0,
+                            )
+                        )
+                        .filter_by(customer_id=customer.id)
+                        .scalar()
+                        or 0
+                    )
+                maximum_redemption = (
+                    calculate_redemption_limit(sale_total, customer_balance)
+                    if customer is not None
+                    else 0
+                )
+                if redeem_points > maximum_redemption:
+                    raise CheckoutError(
+                        "Сумма списания превышает доступный баланс или лимит 20% от покупки."
+                    )
+                amount_paid = sale_total - Decimal(redeem_points)
                 sale = models.Sale(
                     branch_id=branch.id,
                     customer_id=customer.id if customer is not None else None,
                     total_amount=sale_total,
-                    discount=Decimal("0.00"),
+                    discount=Decimal(redeem_points),
                     payment_method=payment_method,
                     created_by_user_id=user.id,
                 )
@@ -2185,11 +3098,80 @@ def create_app(config=None):
                             "stock_quantity": inventory.stock_quantity,
                         }
                     )
+                if customer is not None and redeem_points > 0:
+                    existing_redemption = models.LoyaltyTransaction.query.filter_by(
+                        customer_id=customer.id,
+                        sale_id=sale.id,
+                        transaction_type="redeem",
+                    ).first()
+                    if existing_redemption is None:
+                        db.session.add(
+                            models.LoyaltyTransaction(
+                                customer_id=customer.id,
+                                sale_id=sale.id,
+                                branch_id=branch.id,
+                                transaction_type="redeem",
+                                points=-redeem_points,
+                                operation_id=f"sale-{sale.id}-redeem",
+                            )
+                        )
+                earned_points = (
+                    calculate_earned_points(amount_paid)
+                    if customer is not None
+                    else 0
+                )
+                if customer is not None and earned_points > 0:
+                    existing_earn = models.LoyaltyTransaction.query.filter_by(
+                        customer_id=customer.id,
+                        sale_id=sale.id,
+                        transaction_type="earn",
+                    ).first()
+                    if existing_earn is None:
+                        db.session.add(
+                            models.LoyaltyTransaction(
+                                customer_id=customer.id,
+                                sale_id=sale.id,
+                                branch_id=branch.id,
+                                transaction_type="earn",
+                                points=earned_points,
+                                operation_id=f"sale-{sale.id}-earn",
+                            )
+                        )
+                if customer is not None:
+                    customer_balance = customer_balance - redeem_points + earned_points
+                elif customer is None:
+                    sale_loyalty_transaction = (
+                        models.LoyaltyTransaction.query.filter_by(
+                            sale_id=sale.id
+                        ).first()
+                    )
+                    if sale_loyalty_transaction is None:
+                        claim_token, token_hash = create_claim_token()
+                        ttl = timedelta(
+                            days=app.config["LOYALTY_CLAIM_TTL_DAYS"]
+                        )
+                        db.session.add(
+                            models.GuestLoyaltyClaim(
+                                sale_id=sale.id,
+                                branch_id=branch.id,
+                                token_hash=token_hash,
+                                points=calculate_earned_points(sale_total),
+                                expires_at=(
+                                    datetime.now(timezone.utc).replace(tzinfo=None)
+                                    + ttl
+                                ),
+                            )
+                        )
+                        db.session.flush()
                 response_data = {
                     "sale_id": sale.id,
                     "receipt_url": url_for("sales_receipt", sale_id=sale.id),
                     "branch_id": branch.id,
                     "total_amount": format(sale_total, ".2f"),
+                    "amount_paid": format(amount_paid, ".2f"),
+                    "redeemed_points": redeem_points,
+                    "earned_points": earned_points,
+                    "customer_balance": customer_balance if customer is not None else None,
                     "stock": stock_after_sale,
                 }
         except CheckoutError as error:
@@ -2214,17 +3196,655 @@ def create_app(config=None):
                 error="Не удалось оформить продажу. Изменения не сохранены. Повторите попытку."
             ), 500
 
-        return jsonify(success=True, **response_data), 201
+        response = make_response(jsonify(success=True, **response_data), 201)
+        response.headers["Cache-Control"] = "no-store"
+        if claim_token is not None:
+            response.set_cookie(
+                f"bms_guest_claim_{response_data['sale_id']}",
+                claim_token,
+                max_age=app.config["LOYALTY_CLAIM_TTL_DAYS"] * 24 * 60 * 60,
+                secure=bool(app.config["PUBLIC_BASE_URL"]) or request.is_secure,
+                httponly=True,
+                samesite="Strict",
+                path=response_data["receipt_url"],
+            )
+        return response
 
     @app.route("/customers")
     @login_required
-    @role_required("admin", "manager")
+    @role_required("admin", "manager", "employee")
     def customers():
-        return render_template(
-            "placeholder.html",
-            page_title="Клиенты",
-            message="Управление клиентами будет добавлено на следующем этапе разработки."
+        search_query = request.args.get("q", "").strip()
+        customer_query = models.Customer.query
+        if search_query:
+            pattern = f"%{search_query}%"
+            customer_query = customer_query.filter(
+                or_(
+                    models.Customer.name.ilike(pattern),
+                    models.Customer.phone.ilike(pattern),
+                    models.Customer.email.ilike(pattern),
+                )
+            )
+
+        total_customers = customer_query.count()
+        per_page = 25
+        pages = max(1, (total_customers + per_page - 1) // per_page)
+        requested_page = request.args.get("page", default=1, type=int) or 1
+        page = min(max(requested_page, 1), pages)
+        customer_rows = (
+            customer_query.order_by(
+                models.Customer.name.asc(),
+                models.Customer.id.asc(),
+            )
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
         )
+        return render_template(
+            "customers.html",
+            customers=customer_rows,
+            search_query=search_query,
+            can_manage=(session.get("role") or "").lower()
+            in {"admin", "manager"},
+            page=page,
+            pages=pages,
+            total_customers=total_customers,
+        )
+
+    @app.route("/customers/new", methods=["GET", "POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def customer_create():
+        form_data = {"name": "", "phone": "", "email": ""}
+        if request.method == "POST":
+            for field in form_data:
+                form_data[field] = request.form.get(field, "").strip()
+
+            customer_data = validate_customer_form(form_data)
+            if customer_data is not None:
+                customer = models.Customer(
+                    **customer_data,
+                    registration_date=date.today(),
+                )
+                try:
+                    db.session.add(customer)
+                    db.session.commit()
+                except IntegrityError:
+                    db.session.rollback()
+                    flash(
+                        "Клиент с таким номером телефона уже существует.",
+                        "error",
+                    )
+                except SQLAlchemyError:
+                    db.session.rollback()
+                    current_app.logger.exception(
+                        "Failed to create customer."
+                    )
+                    flash(
+                        "Не удалось создать клиента. Попробуйте ещё раз.",
+                        "error",
+                    )
+                else:
+                    flash("Клиент создан.", "success")
+                    return redirect(
+                        url_for("customer_detail", customer_id=customer.id)
+                    )
+
+        return render_template(
+            "customer_form.html",
+            form_data=form_data,
+            mode="create",
+        )
+
+    @app.route("/customers/<int:customer_id>")
+    @login_required
+    @role_required("admin", "manager", "employee")
+    def customer_detail(customer_id):
+        customer = db.session.get(models.Customer, customer_id)
+        if customer is None:
+            flash("Клиент не найден.", "error")
+            return redirect(url_for("customers"))
+
+        sales_query = (
+            db.session.query(models.Sale, models.Branch)
+            .join(
+                models.Branch,
+                models.Sale.branch_id == models.Branch.id,
+            )
+            .filter(models.Sale.customer_id == customer.id)
+        )
+        if (session.get("role") or "").lower() == "employee":
+            user = db.session.get(models.User, session.get("user_id"))
+            employee_branch_id = models.resolve_employee_branch_id(user)
+            if employee_branch_id is None:
+                sales_query = sales_query.filter(models.Sale.id == -1)
+            else:
+                sales_query = sales_query.filter(
+                    models.Sale.branch_id == employee_branch_id
+                )
+        purchase_rows = sales_query.order_by(
+            models.Sale.created_at.desc(),
+            models.Sale.id.desc(),
+        ).all()
+
+        return render_template(
+            "customer_detail.html",
+            customer=customer,
+            purchase_rows=purchase_rows,
+            can_manage=(session.get("role") or "").lower()
+            in {"admin", "manager"},
+        )
+
+    @app.route(
+        "/customers/<int:customer_id>/edit",
+        methods=["GET", "POST"],
+    )
+    @login_required
+    @role_required("admin", "manager")
+    def customer_edit(customer_id):
+        customer = db.session.get(models.Customer, customer_id)
+        if customer is None:
+            flash("Клиент не найден.", "error")
+            return redirect(url_for("customers"))
+
+        form_data = {
+            "name": customer.name,
+            "phone": customer.phone or "",
+            "email": customer.email or "",
+        }
+        if request.method == "POST":
+            for field in form_data:
+                form_data[field] = request.form.get(field, "").strip()
+
+            customer_data = validate_customer_form(
+                form_data,
+                current_customer_id=customer.id,
+            )
+            if customer_data is not None:
+                for field, value in customer_data.items():
+                    setattr(customer, field, value)
+                try:
+                    db.session.commit()
+                except IntegrityError:
+                    db.session.rollback()
+                    flash(
+                        "Клиент с таким номером телефона уже существует.",
+                        "error",
+                    )
+                except SQLAlchemyError:
+                    db.session.rollback()
+                    current_app.logger.exception(
+                        "Failed to update customer %s.",
+                        customer_id,
+                    )
+                    flash(
+                        "Не удалось сохранить изменения. Попробуйте ещё раз.",
+                        "error",
+                    )
+                else:
+                    flash("Данные клиента обновлены.", "success")
+                    return redirect(
+                        url_for(
+                            "customer_detail",
+                            customer_id=customer.id,
+                        )
+                    )
+
+        return render_template(
+            "customer_form.html",
+            form_data=form_data,
+            mode="edit",
+            customer_id=customer.id,
+        )
+
+    @app.route("/customers/<int:customer_id>/delete", methods=["POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def customer_delete(customer_id):
+        customer = db.session.get(models.Customer, customer_id)
+        if customer is None:
+            flash("Клиент не найден.", "error")
+            return redirect(url_for("customers"))
+
+        sale_exists = db.exists().where(
+            models.Sale.customer_id == models.Customer.id
+        )
+        try:
+            result = db.session.execute(
+                db.delete(models.Customer).where(
+                    models.Customer.id == customer_id,
+                    ~sale_exists,
+                )
+            )
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            flash(
+                "Нельзя удалить клиента: к нему привязана история покупок.",
+                "error",
+            )
+            return redirect(
+                url_for("customer_detail", customer_id=customer_id)
+            )
+        except SQLAlchemyError:
+            db.session.rollback()
+            current_app.logger.exception(
+                "Failed to delete customer %s.",
+                customer_id,
+            )
+            flash(
+                "Не удалось удалить клиента. Попробуйте ещё раз.",
+                "error",
+            )
+            return redirect(
+                url_for("customer_detail", customer_id=customer_id)
+            )
+
+        if result.rowcount != 1:
+            flash(
+                "Нельзя удалить клиента: к нему привязана история покупок.",
+                "error",
+            )
+            return redirect(
+                url_for("customer_detail", customer_id=customer_id)
+            )
+
+        flash("Клиент удалён.", "success")
+        return redirect(url_for("customers"))
+
+    @app.route("/expense-categories")
+    @login_required
+    @role_required("admin", "manager")
+    def expense_categories():
+        category_list = models.ExpenseCategory.query.order_by(
+            models.ExpenseCategory.name.asc()
+        ).all()
+        return render_template(
+            "expense_categories.html",
+            categories=category_list,
+        )
+
+    @app.route("/expense-categories/create", methods=["GET", "POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def expense_category_create():
+        category_name = ""
+        if request.method == "POST":
+            category_name = request.form.get("name", "").strip()
+            if not category_name:
+                flash("Укажите название категории расходов.", "error")
+            elif len(category_name) > 100:
+                flash("Название категории не может превышать 100 символов.", "error")
+            else:
+                duplicate = models.ExpenseCategory.query.filter(
+                    db.func.lower(models.ExpenseCategory.name)
+                    == category_name.lower()
+                ).first()
+                if duplicate is not None:
+                    flash("Такая категория расходов уже существует.", "error")
+                else:
+                    db.session.add(models.ExpenseCategory(name=category_name))
+                    db.session.commit()
+                    flash("Категория расходов создана.", "success")
+                    return redirect(url_for("expense_categories"))
+        return render_template(
+            "expense_category_form.html",
+            category=None,
+            category_name=category_name,
+            mode="create",
+        )
+
+    @app.route(
+        "/expense-categories/<int:category_id>/edit",
+        methods=["GET", "POST"],
+    )
+    @login_required
+    @role_required("admin", "manager")
+    def expense_category_edit(category_id):
+        category = db.session.get(models.ExpenseCategory, category_id)
+        if category is None:
+            flash("Категория расходов не найдена.", "error")
+            return redirect(url_for("expense_categories"))
+
+        category_name = category.name
+        if request.method == "POST":
+            category_name = request.form.get("name", "").strip()
+            if not category_name:
+                flash("Укажите название категории расходов.", "error")
+            elif len(category_name) > 100:
+                flash("Название категории не может превышать 100 символов.", "error")
+            else:
+                duplicate = models.ExpenseCategory.query.filter(
+                    db.func.lower(models.ExpenseCategory.name)
+                    == category_name.lower(),
+                    models.ExpenseCategory.id != category.id,
+                ).first()
+                if duplicate is not None:
+                    flash("Такая категория расходов уже существует.", "error")
+                else:
+                    category.name = category_name
+                    for expense in models.Expense.query.filter_by(category_id=category.id):
+                        expense.category = category_name
+                    db.session.commit()
+                    flash("Категория расходов обновлена.", "success")
+                    return redirect(url_for("expense_categories"))
+        return render_template(
+            "expense_category_form.html",
+            category=category,
+            category_name=category_name,
+            mode="edit",
+        )
+
+    @app.route(
+        "/expense-categories/<int:category_id>/delete",
+        methods=["POST"],
+    )
+    @login_required
+    @role_required("admin", "manager")
+    def expense_category_delete(category_id):
+        category = db.session.get(models.ExpenseCategory, category_id)
+        if category is None:
+            flash("Категория расходов не найдена.", "error")
+            return redirect(url_for("expense_categories"))
+        if models.Expense.query.filter_by(category_id=category.id).first() is not None:
+            flash("Нельзя удалить категорию: она используется расходами.", "error")
+            return redirect(url_for("expense_categories"))
+        db.session.delete(category)
+        db.session.commit()
+        flash("Категория расходов удалена.", "success")
+        return redirect(url_for("expense_categories"))
+
+    @app.route("/expenses")
+    @login_required
+    @role_required("admin", "manager", "employee")
+    def expenses():
+        user = db.session.get(models.User, session.get("user_id"))
+        role = (session.get("role") or "").lower()
+        branches = models.Branch.query.order_by(models.Branch.name.asc()).all()
+        categories = models.ExpenseCategory.query.order_by(models.ExpenseCategory.name.asc()).all()
+
+        query = db.session.query(models.Expense, models.Branch, models.ExpenseCategory).join(
+            models.Branch, models.Expense.branch_id == models.Branch.id
+        ).outerjoin(
+            models.ExpenseCategory,
+            models.Expense.category_id == models.ExpenseCategory.id,
+        )
+
+        selected_branch = None
+        if role == "employee":
+            employee_branch_id = models.resolve_employee_branch_id(user)
+            if employee_branch_id is None:
+                return render_template("403.html", requested_path=request.path), 403
+            selected_branch = db.session.get(models.Branch, employee_branch_id)
+            if selected_branch is None:
+                return render_template("403.html", requested_path=request.path), 403
+            query = query.filter(models.Expense.branch_id == employee_branch_id)
+        else:
+            branch_value = request.args.get("branch_id", "").strip()
+            if branch_value and branch_value != "all":
+                try:
+                    branch_id = int(branch_value)
+                except ValueError:
+                    branch_id = None
+                selected_branch = db.session.get(models.Branch, branch_id) if branch_id else None
+                if selected_branch is None:
+                    flash("Выбранный филиал не найден. Показаны все доступные филиалы.", "error")
+                else:
+                    query = query.filter(models.Expense.branch_id == selected_branch.id)
+
+        date_from_value = request.args.get("date_from", "").strip()
+        date_to_value = request.args.get("date_to", "").strip()
+        date_from = None
+        date_to = None
+        try:
+            if date_from_value:
+                date_from = date.fromisoformat(date_from_value)
+        except ValueError:
+            flash("Укажите корректную начальную дату.", "error")
+            date_from_value = ""
+        try:
+            if date_to_value:
+                date_to = date.fromisoformat(date_to_value)
+        except ValueError:
+            flash("Укажите корректную конечную дату.", "error")
+            date_to_value = ""
+        if date_from is not None and date_to is not None and date_from > date_to:
+            flash("Начальная дата не может быть позже конечной.", "error")
+            date_from = None
+            date_to = None
+            date_from_value = ""
+            date_to_value = ""
+        if date_from is not None:
+            query = query.filter(models.Expense.date >= date_from)
+        if date_to is not None:
+            query = query.filter(models.Expense.date <= date_to)
+
+        category_value = request.args.get("category_id", "").strip()
+        selected_category = None
+        if category_value:
+            try:
+                category_id = int(category_value)
+            except ValueError:
+                category_id = None
+            selected_category = db.session.get(models.ExpenseCategory, category_id) if category_id else None
+            if selected_category is None:
+                flash("Выбранная категория расходов не найдена.", "error")
+            else:
+                query = query.filter(models.Expense.category_id == selected_category.id)
+
+        expense_rows = query.order_by(
+            models.Expense.date.desc(),
+            models.Expense.id.desc(),
+        ).all()
+        total_amount = sum(
+            (row[0].amount for row in expense_rows),
+            Decimal("0.00"),
+        )
+        financial_summary = calculate_financial_summary(
+            date_from=date_from,
+            date_to=date_to,
+            branch_id=(selected_branch.id if selected_branch else None),
+        )
+        return render_template(
+            "expenses.html",
+            expense_rows=expense_rows,
+            branches=branches if role in {"admin", "manager"} else [],
+            categories=categories,
+            selected_branch=selected_branch,
+            selected_category=selected_category,
+            can_select_branch=role in {"admin", "manager"},
+            date_from_value=date_from_value,
+            date_to_value=date_to_value,
+            total_amount=total_amount,
+            expense_count=len(expense_rows),
+            financial_summary=financial_summary,
+        )
+
+    def expense_form_options():
+        return (
+            models.ExpenseCategory.query.order_by(models.ExpenseCategory.name.asc()).all(),
+            models.Branch.query.order_by(models.Branch.name.asc()).all(),
+        )
+
+    @app.route("/expenses/new", methods=["GET", "POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def expense_create():
+        categories, branches = expense_form_options()
+        form_data = {
+            "date": date.today().isoformat(),
+            "amount": "",
+            "description": "",
+            "category_id": "",
+            "branch_id": "",
+        }
+        if request.method == "POST":
+            form_data = {
+                field: request.form.get(field, "").strip()
+                for field in form_data
+            }
+            if form_data["date"] and len(form_data["date"]) <= 10:
+                try:
+                    parsed_date = date.fromisoformat(form_data["date"])
+                except ValueError:
+                    parsed_date = None
+            else:
+                parsed_date = None
+            try:
+                amount = Decimal(form_data["amount"].replace(" ", ""))
+            except (InvalidOperation, ValueError):
+                amount = None
+            category = db.session.get(models.ExpenseCategory, int(form_data["category_id"])) if form_data["category_id"].isdigit() else None
+            try:
+                branch_id = int(form_data["branch_id"])
+            except (TypeError, ValueError):
+                branch_id = None
+            branch = db.session.get(models.Branch, branch_id) if branch_id else None
+
+            errors = []
+            if parsed_date is None:
+                errors.append("Укажите корректную дату расхода.")
+            if amount is None or not amount.is_finite() or amount <= 0:
+                errors.append("Сумма расхода должна быть больше нуля.")
+            if not form_data["description"]:
+                errors.append("Укажите описание расхода.")
+            elif len(form_data["description"]) > 255:
+                errors.append("Описание расхода не может превышать 255 символов.")
+            if category is None:
+                errors.append("Выберите категорию расхода.")
+            if branch is None:
+                errors.append("Выберите существующий филиал.")
+            if (session.get("role") or "").lower() == "manager" and not branches:
+                errors.append("Сначала создайте филиал.")
+
+            if not errors:
+                expense = models.Expense(
+                    date=parsed_date,
+                    amount=amount,
+                    description=form_data["description"],
+                    category_id=category.id,
+                    category=category.name,
+                    branch_id=branch.id,
+                )
+                db.session.add(expense)
+                db.session.commit()
+                flash("Расход создан.", "success")
+                return redirect(url_for("expense_detail", expense_id=expense.id))
+            for message in errors:
+                flash(message, "error")
+        return render_template(
+            "expense_form.html",
+            expense=form_data,
+            categories=categories,
+            branches=branches,
+            mode="create",
+        )
+
+    @app.route("/expenses/<int:expense_id>")
+    @login_required
+    @role_required("admin", "manager", "employee")
+    def expense_detail(expense_id):
+        expense = db.session.get(models.Expense, expense_id)
+        if expense is None:
+            flash("Расход не найден.", "error")
+            return redirect(url_for("expenses"))
+        if not expense_access_allowed(expense):
+            return render_template("403.html", requested_path=request.path), 403
+        branch = db.session.get(models.Branch, expense.branch_id)
+        category = db.session.get(models.ExpenseCategory, expense.category_id) if expense.category_id else None
+        return render_template(
+            "expense_detail.html",
+            expense=expense,
+            branch=branch,
+            category=category,
+        )
+
+    def expense_access_allowed(expense):
+        role = (session.get("role") or "").lower()
+        if role in {"admin", "manager"}:
+            return True
+        if role != "employee":
+            return False
+        user = db.session.get(models.User, session.get("user_id"))
+        employee_branch_id = models.resolve_employee_branch_id(user)
+        return employee_branch_id == expense.branch_id
+
+    @app.route("/expenses/<int:expense_id>/edit", methods=["GET", "POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def expense_edit(expense_id):
+        expense = db.session.get(models.Expense, expense_id)
+        if expense is None:
+            flash("Расход не найден.", "error")
+            return redirect(url_for("expenses"))
+        categories, branches = expense_form_options()
+        form_data = {
+            "date": expense.date.isoformat(),
+            "amount": format(expense.amount, "f"),
+            "description": expense.description or "",
+            "category_id": str(expense.category_id or ""),
+            "branch_id": str(expense.branch_id),
+        }
+        if request.method == "POST":
+            form_data = {field: request.form.get(field, "").strip() for field in form_data}
+            try:
+                parsed_date = date.fromisoformat(form_data["date"])
+            except ValueError:
+                parsed_date = None
+            try:
+                amount = Decimal(form_data["amount"].replace(" ", ""))
+            except (InvalidOperation, ValueError):
+                amount = None
+            category = db.session.get(models.ExpenseCategory, int(form_data["category_id"])) if form_data["category_id"].isdigit() else None
+            branch = db.session.get(models.Branch, int(form_data["branch_id"])) if form_data["branch_id"].isdigit() else None
+
+            errors = []
+            if parsed_date is None:
+                errors.append("Укажите корректную дату расхода.")
+            if amount is None or not amount.is_finite() or amount <= 0:
+                errors.append("Сумма расхода должна быть больше нуля.")
+            if not form_data["description"]:
+                errors.append("Укажите описание расхода.")
+            elif len(form_data["description"]) > 255:
+                errors.append("Описание расхода не может превышать 255 символов.")
+            if category is None:
+                errors.append("Выберите категорию расхода.")
+            if branch is None:
+                errors.append("Выберите существующий филиал.")
+
+            if not errors:
+                expense.date = parsed_date
+                expense.amount = amount
+                expense.description = form_data["description"]
+                expense.category_id = category.id
+                expense.category = category.name
+                expense.branch_id = branch.id
+                db.session.commit()
+                flash("Расход обновлён.", "success")
+                return redirect(url_for("expense_detail", expense_id=expense.id))
+            for message in errors:
+                flash(message, "error")
+        return render_template(
+            "expense_form.html",
+            expense=form_data,
+            categories=categories,
+            branches=branches,
+            mode="edit",
+            expense_id=expense.id,
+        )
+
+    @app.route("/expenses/<int:expense_id>/delete", methods=["POST"])
+    @login_required
+    @role_required("admin", "manager")
+    def expense_delete(expense_id):
+        expense = db.session.get(models.Expense, expense_id)
+        if expense is None:
+            flash("Расход не найден.", "error")
+            return redirect(url_for("expenses"))
+        db.session.delete(expense)
+        db.session.commit()
+        flash("Расход удалён.", "success")
+        return redirect(url_for("expenses"))
 
     @app.route("/analytics")
     @login_required

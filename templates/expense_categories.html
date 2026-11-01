@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}Категории расходов | BMS{% endblock %}
+{% block page_title %}Категории расходов{% endblock %}
+
+{% block content %}
+<section class="panel-card categories-panel">
+    <div class="panel-header split-header">
+        <h3>Категории расходов</h3>
+        <a class="primary-btn" href="{{ url_for('expense_category_create') }}">Добавить категорию</a>
+    </div>
+    {% if categories %}
+    <div class="table-wrap">
+        <table class="data-table"><thead><tr><th>Название</th><th>Действия</th></tr></thead><tbody>
+        {% for category in categories %}
+        <tr><td>{{ category.name }}</td><td><div class="row-actions">
+            <a class="table-link" href="{{ url_for('expense_category_edit', category_id=category.id) }}">Редактировать</a>
+            <form method="POST" action="{{ url_for('expense_category_delete', category_id=category.id) }}" onsubmit="return confirm('Удалить эту категорию?');">
+                <button class="danger-btn" type="submit">Удалить</button>
+            </form>
+        </div></td></tr>
+        {% endfor %}</tbody></table>
+    </div>
+    {% else %}
+    <div class="empty-state-box"><p>Категории расходов пока не созданы.</p></div>
+    {% endif %}
+</section>
+{% endblock %}

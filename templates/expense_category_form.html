@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+
+{% set page_title = 'Создать категорию расходов' if mode == 'create' else 'Редактировать категорию расходов' %}
+{% block title %}{{ page_title }} | BMS{% endblock %}
+{% block page_title %}{{ page_title }}{% endblock %}
+
+{% block content %}
+<section class="panel-card form-panel">
+    <div class="panel-header split-header">
+        <h3>{{ page_title }}</h3>
+        <a class="text-btn" href="{{ url_for('expense_categories') }}">Назад к категориям</a>
+    </div>
+    <form class="auth-form" method="POST" action="{{ url_for('expense_category_create') if mode == 'create' else url_for('expense_category_edit', category_id=category.id) }}">
+        <div class="form-group">
+            <label for="name">Название категории</label>
+            <input id="name" name="name" type="text" maxlength="100" value="{{ category_name }}" required>
+        </div>
+        <button type="submit">{{ 'Создать категорию' if mode == 'create' else 'Сохранить изменения' }}</button>
+    </form>
+</section>
+{% endblock %}

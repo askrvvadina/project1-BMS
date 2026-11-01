@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>{% block title %}BMS Бонусы{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="customer-portal-body">
+    <main class="customer-portal-shell">
+        <a class="customer-portal-brand" href="{{ url_for('customer_portal_dashboard') }}">
+            <span class="customer-portal-mark" aria-hidden="true">B</span>
+            <span>BMS <small>Бонусы</small></span>
+        </a>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <div class="customer-portal-flashes" aria-live="polite">
+                {% for category, message in messages %}
+                <p class="customer-portal-flash {{ category }}">{{ message }}</p>
+                {% endfor %}
+            </div>
+            {% endif %}
+        {% endwith %}
+        {% block portal_content %}{% endblock %}
+        <footer class="customer-portal-footer">Программа лояльности BMS</footer>
+    </main>
+</body>
+</html>

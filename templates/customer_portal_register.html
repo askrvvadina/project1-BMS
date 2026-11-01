@@ -1,0 +1,22 @@
+{% extends "customer_portal_base.html" %}
+{% block title %}Регистрация бонусного аккаунта | BMS{% endblock %}
+{% block portal_content %}
+<section class="customer-portal-card">
+    <p class="customer-portal-eyebrow">Программа лояльности BMS</p>
+    <h1>Создать аккаунт</h1>
+    <p class="customer-portal-muted">Если номер уже используется в BMS, обратитесь в магазин для его безопасного подключения.</p>
+    <form method="post" class="customer-portal-form">
+        <input type="hidden" name="csrf_token" value="{{ portal_csrf_token() }}">
+        <label for="name">Имя</label>
+        <input id="name" name="name" type="text" autocomplete="name" maxlength="120" required>
+        <label for="phone">Номер телефона</label>
+        <input id="phone" name="phone" type="tel" autocomplete="tel" maxlength="30" required>
+        <label for="password">Пароль</label>
+        <input id="password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required>
+        <label for="confirm_password">Повторите пароль</label>
+        <input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" minlength="8" maxlength="128" required>
+        <button class="customer-portal-primary" type="submit">Зарегистрироваться</button>
+    </form>
+    <p class="customer-portal-switch">Уже есть аккаунт? <a href="{{ url_for('customer_portal_login') }}">Войти</a></p>
+</section>
+{% endblock %}

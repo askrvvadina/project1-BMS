@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}{{ customer.name }} | Клиенты | BMS{% endblock %}
+{% block page_title %}Карточка клиента{% endblock %}
+
+{% block content %}
+<section class="customer-detail-page">
+    <div class="customer-detail-actions">
+        <a class="secondary-btn" href="{{ url_for('customers') }}">К списку клиентов</a>
+        {% if can_manage %}
+        <a class="primary-btn" href="{{ url_for('customer_edit', customer_id=customer.id) }}">Редактировать</a>
+        {% endif %}
+    </div>
+
+    <section class="panel-card customer-profile-card">
+        <div class="profile-header">
+            <div class="profile-avatar">{{ customer.name[:2]|upper }}</div>
+            <div>
+                <p class="eyebrow">Клиент №{{ customer.id }}</p>
+                <h2>{{ customer.name }}</h2>
+            </div>
+        </div>
+        <div class="profile-details">
+            <div class="detail-row"><span>Телефон</span><strong>{{ customer.phone or '—' }}</strong></div>
+            <div class="detail-row"><span>Электронная почта</span><strong>{{ customer.email or '—' }}</strong></div>
+            <div class="detail-row"><span>Дата регистрации</span><strong>{{ customer.registration_date.strftime('%d.%m.%Y') if customer.registration_date else '—' }}</strong></div>
+        </div>
+        {% if can_manage %}
+        <form class="customer-delete-form" method="POST" action="{{ url_for('customer_delete', customer_id=customer.id) }}" onsubmit="return confirm('Удалить клиента? Клиента с историей покупок удалить нельзя.');">
+            <button class="danger-btn" type="submit">Удалить клиента</button>
+        </form>
+        {% endif %}
+    </section>
+
+    <section class="panel-card customer-purchases-card">
+        <div class="panel-header split-header">
+            <h3>История покупок</h3>
+            <span class="customer-count">{{ purchase_rows|length }} продаж</span>
+        </div>
+        {% if purchase_rows %}
+        <div class="table-wrap">
+            <table class="data-table customer-purchases-table">
+                <thead>
+                    <tr>
+                        <th>Продажа</th>
+                        <th>Дата и время</th>
+                        <th>Филиал</th>
+                        <th>Сумма покупки</th>
+                        <th>Погашено баллов</th>
+                        <th>Фактически оплачено</th>
+                        <th>Оплата</th>
+                        <th>Чек</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for sale, branch in purchase_rows %}
+                    <tr>
+                        <td>#{{ sale.id }}</td>
+                        <td>{{ sale.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                        <td>{{ branch.name }}</td>
+                        <td>{{ '%.2f'|format(sale.total_amount) }}</td>
+                        <td>{{ '%.2f'|format(sale.discount or 0) }}</td>
+                        <td>{{ '%.2f'|format((sale.total_amount or 0) - (sale.discount or 0)) }}</td>
+                        <td>{{ {'cash': 'Наличные', 'card': 'Карта'}.get(sale.payment_method, sale.payment_method) }}</td>
+                        <td><a class="table-link" href="{{ url_for('sales_receipt', sale_id=sale.id) }}">Открыть чек</a></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state-box customer-empty">
+            <p>Покупок в доступной истории пока нет.</p>
+        </div>
+        {% endif %}
+    </section>
+</section>
+{% endblock %}

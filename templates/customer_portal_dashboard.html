@@ -1,0 +1,52 @@
+{% extends "customer_portal_base.html" %}
+{% block title %}Мои бонусы | BMS{% endblock %}
+{% block portal_content %}
+<header class="customer-portal-heading">
+    <div>
+        <p class="customer-portal-eyebrow">Личный кабинет</p>
+        <h1>Здравствуйте, {{ customer.name }}</h1>
+    </div>
+    <form method="post" action="{{ url_for('customer_portal_logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ portal_csrf_token() }}">
+        <button class="customer-portal-logout" type="submit">Выйти</button>
+    </form>
+</header>
+<section class="customer-portal-balance" aria-label="Доступный бонусный баланс">
+    <span>Доступно бонусов</span>
+    <strong>{{ balance }}</strong>
+    <small>1 бонус = 1 сом</small>
+</section>
+<section class="customer-portal-stats" aria-label="Итоги программы">
+    <article><span>Всего начислено</span><strong>{{ earned_total }}</strong></article>
+    <article><span>Использовано</span><strong>{{ redeemed_total }}</strong></article>
+</section>
+<section class="customer-portal-card customer-portal-rules">
+    <h2>Как работают бонусы</h2>
+    <ul>
+        <li>За покупку начисляется 1% от фактически оплаченной суммы.</li>
+        <li>Баллы округляются вниз до целого числа.</li>
+        <li>Баланс действует во всех филиалах BMS.</li>
+        <li>Гостевую покупку можно привязать по QR-коду чека после входа.</li>
+    </ul>
+</section>
+<section class="customer-portal-card">
+    <h2>Последние операции</h2>
+    {% if transactions %}
+    <ul class="customer-portal-transactions">
+        {% for transaction in transactions %}
+        <li>
+            <span>
+                <strong>{{ {'earn': 'Начисление', 'redeem': 'Использование', 'reversal': 'Корректировка'}.get(transaction.transaction_type, 'Операция') }}</strong>
+                <small>{{ transaction.created_at.strftime('%d.%m.%Y %H:%M') }}</small>
+            </span>
+            <b class="{{ 'positive' if transaction.points > 0 else 'negative' }}">
+                {{ '+' if transaction.points > 0 else '' }}{{ transaction.points }}
+            </b>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="customer-portal-muted">Пока нет бонусных операций.</p>
+    {% endif %}
+</section>
+{% endblock %}

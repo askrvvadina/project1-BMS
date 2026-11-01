@@ -1,0 +1,20 @@
+{% extends "customer_portal_base.html" %}
+{% block title %}Получение бонусов | BMS{% endblock %}
+{% block portal_content %}
+<section class="customer-portal-card">
+    <p class="customer-portal-eyebrow">Бонусная покупка</p>
+    <h1>Получение баллов</h1>
+    {% if claim %}
+    <p>За покупку можно получить:</p>
+    <p class="customer-portal-claim-points"><strong>{{ claim.points }}</strong> бонусов</p>
+    <p class="customer-portal-muted">Подтвердите привязку покупки к вашему аккаунту. Повторное получение невозможно.</p>
+    <form method="post" class="customer-portal-form">
+        <input type="hidden" name="csrf_token" value="{{ portal_csrf_token() }}">
+        <button class="customer-portal-primary" type="submit">Получить бонусы</button>
+    </form>
+    {% else %}
+    <p class="customer-portal-muted" role="status">{{ message }}</p>
+    <a class="customer-portal-primary customer-portal-link" href="{{ url_for('customer_portal_dashboard') }}">В личный кабинет</a>
+    {% endif %}
+</section>
+{% endblock %}

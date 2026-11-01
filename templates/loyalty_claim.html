@@ -1,0 +1,54 @@
+{% extends "customer_portal_base.html" %}
+
+{% block title %}Бонусные баллы | BMS{% endblock %}
+
+{% block portal_content %}
+<section class="customer-portal-card loyalty-claim-page" aria-labelledby="loyalty-claim-title">
+    <h1 id="loyalty-claim-title">Проверка бонусных баллов</h1>
+    <p id="loyalty-claim-message" role="status" aria-live="polite">
+        Проверяем ссылку…
+    </p>
+    <p>Для получения баллов потребуется войти или зарегистрироваться.</p>
+    <div id="loyalty-claim-actions" class="loyalty-claim-actions" hidden>
+        <a class="primary-btn" href="{{ url_for('customer_portal_login') }}">Войти</a>
+        <a class="secondary-btn" href="{{ url_for('customer_portal_register') }}">Создать аккаунт</a>
+        <a class="secondary-btn" href="{{ url_for('customer_portal_claim') }}">У меня уже открыт аккаунт</a>
+    </div>
+</section>
+<script>
+    (function () {
+        const message = document.getElementById('loyalty-claim-message');
+        const claimActions = document.getElementById('loyalty-claim-actions');
+        const token = window.location.hash.slice(1);
+        window.history.replaceState(
+            null,
+            '',
+            window.location.pathname + window.location.search
+        );
+
+        if (!/^[A-Za-z0-9_-]{43}$/.test(token)) {
+            message.textContent = 'Ссылка недействительна или срок её действия истёк.';
+            return;
+        }
+
+        fetch('{{ url_for("guest_loyalty_claim_validate") }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            cache: 'no-store',
+            body: JSON.stringify({ token: token })
+        }).then(function (response) {
+            return response.json().then(function (result) {
+                return { response: response, result: result };
+            });
+        }).then(function (value) {
+            message.textContent = value.result.message
+                || 'Ссылка недействительна или срок её действия истёк.';
+            if (value.response.ok && value.result.status === 'available') {
+                claimActions.hidden = false;
+            }
+        }).catch(function () {
+            message.textContent = 'Не удалось проверить ссылку. Попробуйте позже.';
+        });
+    }());
+</script>
+{% endblock %}

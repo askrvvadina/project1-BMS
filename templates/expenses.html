@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}Расходы | BMS{% endblock %}
+{% block page_title %}Расходы{% endblock %}
+
+{% block content %}
+<section class="sales-history-page">
+<form class="sales-filters panel-card" method="GET" action="{{ url_for('expenses') }}">
+    {% if can_select_branch %}
+    <label>
+        Филиал
+        <select name="branch_id">
+            <option value="all" {{ 'selected' if not selected_branch else '' }}>Все филиалы</option>
+            {% for branch in branches %}
+            <option value="{{ branch.id }}" {{ 'selected' if selected_branch and selected_branch.id == branch.id else '' }}>{{ branch.name }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    {% else %}
+    <label>Филиал<strong>{{ selected_branch.name if selected_branch else 'Назначенный филиал недоступен' }}</strong></label>
+    {% endif %}
+    <label>
+        Категория расходов
+        <select name="category_id">
+            <option value="" {{ 'selected' if not selected_category else '' }}>Все категории</option>
+            {% for category in categories %}
+            <option value="{{ category.id }}" {{ 'selected' if selected_category and selected_category.id == category.id else '' }}>{{ category.name }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <label>
+        С даты
+        <input type="date" name="date_from" value="{{ date_from_value }}">
+    </label>
+    <label>
+        По дату
+        <input type="date" name="date_to" value="{{ date_to_value }}">
+    </label>
+    <button class="primary-btn" type="submit">Применить фильтры</button>
+    <a class="secondary-btn" href="{{ url_for('expenses') }}">Сбросить фильтры</a>
+</form>
+</section>
+
+<section class="stats-grid" aria-label="Финансовая сводка за выбранный период">
+    <article class="stat-card revenue"><div class="stat-header"><span class="stat-label">Валовая выручка</span></div><h3>{{ '%.2f'|format(financial_summary.gross_sales) }} сом</h3></article>
+    <article class="stat-card sales"><div class="stat-header"><span class="stat-label">Бонусы списаны</span></div><h3>{{ '%.2f'|format(financial_summary.loyalty_discounts) }} сом</h3></article>
+    <article class="stat-card products"><div class="stat-header"><span class="stat-label">Фактически оплачено продажами</span></div><h3>{{ '%.2f'|format(financial_summary.actual_paid_sales) }} сом</h3></article>
+    <article class="stat-card employees"><div class="stat-header"><span class="stat-label">Операционные расходы</span></div><h3>{{ '%.2f'|format(financial_summary.total_expenses) }} сом</h3></article>
+</section>
+<section class="panel-card">
+    <div class="panel-header"><h3>Операционная разница: {{ '%.2f'|format(financial_summary.operational_difference) }} сом</h3></div>
+    <p>Фактически оплаченная выручка минус операционные расходы. Это не чистая прибыль.</p>
+</section>
+
+<section class="panel-card">
+    <div class="panel-header split-header">
+        <div>
+            <h3>Список расходов</h3>
+            <p>{{ expense_count }} {{ 'запись' if expense_count == 1 else ('записи' if 2 <= expense_count % 100 <= 4 else 'записей') }} · Итого: {{ '%.2f'|format(total_amount) }} сом</p>
+        </div>
+        {% if (session.get('role') or '').lower() in ['admin', 'manager'] %}
+        <a class="primary-btn" href="{{ url_for('expense_create') }}">Добавить расход</a>
+        {% endif %}
+    </div>
+
+    {% if expense_rows %}
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead><tr><th>№</th><th>Дата</th><th>Категория</th><th>Описание</th><th>Филиал</th><th>Сумма (сом)</th><th>Действия</th></tr></thead>
+            <tbody>
+            {% for expense, branch, category in expense_rows %}
+                <tr>
+                    <td>#{{ expense.id }}</td>
+                    <td>{{ expense.date.strftime('%d.%m.%Y') }}</td>
+                    <td>{{ category.name if category else expense.category }}</td>
+                    <td>{{ expense.description }}</td>
+                    <td>{{ branch.name }}</td>
+                    <td>{{ '%.2f'|format(expense.amount) }} сом</td>
+                    <td><a class="table-link" href="{{ url_for('expense_detail', expense_id=expense.id) }}">Просмотреть</a></td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state-box"><p>Расходы по выбранным условиям не найдены.</p></div>
+    {% endif %}
+</section>
+{% endblock %}

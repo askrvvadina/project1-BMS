@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block title %}Клиенты | BMS{% endblock %}
+{% block page_title %}Клиенты{% endblock %}
+
+{% block content %}
+<section class="panel-card customers-panel">
+    <div class="panel-header split-header">
+        <div>
+            <h3>Список клиентов</h3>
+            <span class="customer-count">{{ total_customers }} клиентов</span>
+        </div>
+        {% if can_manage %}
+        <a class="primary-btn" href="{{ url_for('customer_create') }}">Добавить клиента</a>
+        {% endif %}
+    </div>
+
+    <form class="customer-toolbar" method="GET" action="{{ url_for('customers') }}">
+        <label for="customer-search">Поиск по имени, телефону или почте</label>
+        <div class="customer-search-controls">
+            <input id="customer-search" name="q" type="search" value="{{ search_query }}" placeholder="Имя, телефон или электронная почта">
+            <button class="primary-btn" type="submit">Найти</button>
+            {% if search_query %}
+            <a class="text-btn" href="{{ url_for('customers') }}">Сбросить</a>
+            {% endif %}
+        </div>
+    </form>
+
+    {% if customers %}
+    <div class="table-wrap">
+        <table class="data-table customer-table">
+            <thead>
+                <tr>
+                    <th>Имя</th>
+                    <th>Телефон</th>
+                    <th>Электронная почта</th>
+                    <th>Дата регистрации</th>
+                    <th>Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for customer in customers %}
+                <tr>
+                    <td>{{ customer.name }}</td>
+                    <td>{{ customer.phone or '—' }}</td>
+                    <td>{{ customer.email or '—' }}</td>
+                    <td>{{ customer.registration_date.strftime('%d.%m.%Y') if customer.registration_date else '—' }}</td>
+                    <td>
+                        <div class="row-actions">
+                            <a class="table-link" href="{{ url_for('customer_detail', customer_id=customer.id) }}">Просмотр</a>
+                            {% if can_manage %}
+                            <a class="table-link" href="{{ url_for('customer_edit', customer_id=customer.id) }}">Редактировать</a>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state-box customer-empty">
+        <p>{{ 'Клиенты по заданному запросу не найдены.' if search_query else 'Клиентов пока нет.' }}</p>
+    </div>
+    {% endif %}
+
+    {% if pages > 1 %}
+    <nav class="customer-pagination" aria-label="Страницы списка клиентов">
+        {% if page > 1 %}
+        <a class="secondary-btn" href="{{ url_for('customers', page=page - 1, q=search_query) }}">Назад</a>
+        {% endif %}
+        <span>Страница {{ page }} из {{ pages }}</span>
+        {% if page < pages %}
+        <a class="secondary-btn" href="{{ url_for('customers', page=page + 1, q=search_query) }}">Далее</a>
+        {% endif %}
+    </nav>
+    {% endif %}
+</section>
+{% endblock %}

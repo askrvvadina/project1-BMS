@@ -1,0 +1,18 @@
+{% extends "customer_portal_base.html" %}
+{% block title %}Вход в бонусный аккаунт | BMS{% endblock %}
+{% block portal_content %}
+<section class="customer-portal-card">
+    <p class="customer-portal-eyebrow">Ваши покупки и бонусы</p>
+    <h1>Вход в аккаунт</h1>
+    <p class="customer-portal-muted">Введите номер телефона и пароль.</p>
+    <form method="post" class="customer-portal-form">
+        <input type="hidden" name="csrf_token" value="{{ portal_csrf_token() }}">
+        <label for="phone">Номер телефона</label>
+        <input id="phone" name="phone" type="tel" autocomplete="tel" maxlength="30" required>
+        <label for="password">Пароль</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" maxlength="128" required>
+        <button class="customer-portal-primary" type="submit">Войти</button>
+    </form>
+    <p class="customer-portal-switch">Нет аккаунта? <a href="{{ url_for('customer_portal_register') }}">Создать аккаунт</a></p>
+</section>
+{% endblock %}

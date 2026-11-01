@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}Расход №{{ expense.id }} | BMS{% endblock %}
+{% block page_title %}Расход №{{ expense.id }}{% endblock %}
+
+{% block content %}
+<section class="branch-detail-grid">
+    <div class="panel-card detail-panel">
+        <div class="panel-header split-header">
+            <h3>Сведения о расходе</h3>
+            <a class="text-btn" href="{{ url_for('expenses') }}">Назад к расходам</a>
+        </div>
+        <div class="profile-details">
+            <div class="detail-row"><span>Дата</span><strong>{{ expense.date.strftime('%d.%m.%Y') }}</strong></div>
+            <div class="detail-row"><span>Сумма</span><strong>{{ '%.2f'|format(expense.amount) }} сом</strong></div>
+            <div class="detail-row"><span>Категория</span><strong>{{ category.name if category else expense.category }}</strong></div>
+            <div class="detail-row"><span>Филиал</span><strong>{{ branch.name if branch else '—' }}</strong></div>
+            <div class="detail-row"><span>Описание</span><strong>{{ expense.description }}</strong></div>
+        </div>
+    </div>
+    {% if (session.get('role') or '').lower() in ['admin', 'manager'] %}
+    <div class="panel-card detail-panel">
+        <div class="panel-header"><h3>Действия</h3></div>
+        <div class="status-action"><a class="primary-btn" href="{{ url_for('expense_edit', expense_id=expense.id) }}">Редактировать</a></div>
+        <div class="status-action">
+            <form method="POST" action="{{ url_for('expense_delete', expense_id=expense.id) }}" onsubmit="return confirm('Удалить этот расход?');">
+                <button class="danger-btn" type="submit">Удалить расход</button>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}

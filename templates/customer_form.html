@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% set page_title = 'Добавить клиента' if mode == 'create' else 'Редактировать клиента' %}
+{% block title %}{{ page_title }} | BMS{% endblock %}
+{% block page_title %}{{ page_title }}{% endblock %}
+
+{% block content %}
+<section class="panel-card form-panel customer-form-panel">
+    <div class="panel-header split-header">
+        <h3>{{ page_title }}</h3>
+        <a class="text-btn" href="{{ url_for('customers') }}">Назад к клиентам</a>
+    </div>
+
+    <form class="auth-form" method="POST" action="{{ url_for('customer_create') if mode == 'create' else url_for('customer_edit', customer_id=customer_id) }}">
+        <div class="form-group">
+            <label for="name">Имя клиента</label>
+            <input id="name" name="name" type="text" value="{{ form_data.name }}" maxlength="120" autocomplete="name" required>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="phone">Телефон</label>
+                <input id="phone" name="phone" type="tel" value="{{ form_data.phone }}" maxlength="30" autocomplete="tel" placeholder="+7 900 123-45-67" required>
+                <small>Телефон используется для проверки повторных записей.</small>
+            </div>
+            <div class="form-group">
+                <label for="email">Электронная почта <span>(необязательно)</span></label>
+                <input id="email" name="email" type="email" value="{{ form_data.email }}" maxlength="120" autocomplete="email">
+            </div>
+        </div>
+
+        {% if mode == 'create' %}
+        <p class="customer-form-note">Дата регистрации будет сохранена автоматически.</p>
+        {% endif %}
+        <button type="submit">{{ 'Создать клиента' if mode == 'create' else 'Сохранить изменения' }}</button>
+    </form>
+</section>
+{% endblock %}

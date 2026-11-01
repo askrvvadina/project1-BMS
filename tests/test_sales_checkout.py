@@ -1,11 +1,13 @@
+import hashlib
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier, Thread
 
 from sqlalchemy import event
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import create_app, db
@@ -15,7 +17,9 @@ from app.models import (
     Category,
     Customer,
     Employee,
+    GuestLoyaltyClaim,
     InventoryTransaction,
+    LoyaltyTransaction,
     Notification,
     Product,
     Sale,
@@ -33,6 +37,8 @@ class SalesCheckoutTests(unittest.TestCase):
                 "TESTING": True,
                 "SECRET_KEY": "isolated-checkout-tests",
                 "SQLALCHEMY_DATABASE_URI": f"sqlite:///{database_path.as_posix()}",
+                "PUBLIC_BASE_URL": "https://bms.example.test",
+                "SESSION_COOKIE_SECURE": False,
             }
         )
 
@@ -229,6 +235,14 @@ class SalesCheckoutTests(unittest.TestCase):
             self.assertEqual(sale.customer_id, self.ids["customer"])
             self.assertEqual(sale.discount, Decimal("0.00"))
             self.assertEqual(sale.payment_method, "card")
+            self.assertEqual(
+                LoyaltyTransaction.query.filter_by(sale_id=sale.id).count(),
+                0,
+            )
+            self.assertEqual(
+                GuestLoyaltyClaim.query.filter_by(sale_id=sale.id).count(),
+                0,
+            )
 
             items = SaleItem.query.filter_by(sale_id=sale.id).all()
             self.assertEqual(
@@ -279,12 +293,646 @@ class SalesCheckoutTests(unittest.TestCase):
             self.assertIsNone(sale.customer_id)
             self.assertEqual(sale.payment_method, "cash")
             self.assertEqual(
+                LoyaltyTransaction.query.filter_by(sale_id=sale.id).count(),
+                0,
+            )
+            self.assertEqual(
                 db.session.get(
                     BranchInventory,
                     self.ids["case_a_inventory"],
                 ).stock_quantity,
                 0,
             )
+
+    def test_customer_sale_earns_shared_branch_points_and_receipt_balance(self):
+        with self.app.app_context():
+            db.session.get(Product, self.ids["phone"]).selling_price = Decimal("100.00")
+            other_customer = Customer(
+                name="Another POS customer",
+                registration_date=date(2025, 1, 1),
+            )
+            db.session.add(other_customer)
+            db.session.flush()
+            db.session.add_all(
+                [
+                    LoyaltyTransaction(
+                        customer_id=self.ids["customer"],
+                        branch_id=self.ids["branch_a"],
+                        transaction_type="earn",
+                        points=3,
+                        operation_id="existing-customer-points",
+                    ),
+                    LoyaltyTransaction(
+                        customer_id=other_customer.id,
+                        branch_id=self.ids["branch_a"],
+                        transaction_type="earn",
+                        points=900,
+                        operation_id="other-customer-points",
+                    ),
+                ]
+            )
+            db.session.commit()
+
+        response = self.submit(
+            self.client_for("employee"),
+            [{"product_id": self.ids["phone"], "quantity": 2}],
+            branch_id=self.ids["branch_a"],
+            customer_id=self.ids["customer"],
+            payment_method="card",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json["total_amount"], "200.00")
+        self.assertEqual(response.json["amount_paid"], "200.00")
+        sale_id = response.json["sale_id"]
+
+        with self.app.app_context():
+            sale = db.session.get(Sale, sale_id)
+            earned = LoyaltyTransaction.query.filter_by(
+                sale_id=sale_id,
+                transaction_type="earn",
+            ).one()
+            self.assertEqual(sale.branch_id, self.ids["branch_b"])
+            self.assertEqual(earned.customer_id, self.ids["customer"])
+            self.assertEqual(earned.branch_id, self.ids["branch_b"])
+            self.assertEqual(earned.points, 2)
+            self.assertEqual(earned.operation_id, f"sale-{sale_id}-earn")
+            self.assertEqual(
+                db.session.query(db.func.sum(LoyaltyTransaction.points))
+                .filter_by(customer_id=self.ids["customer"])
+                .scalar(),
+                5,
+            )
+
+        receipt_response = self.client_for("employee").get(
+            response.json["receipt_url"]
+        )
+        self.assertEqual(receipt_response.status_code, 200)
+        receipt = receipt_response.get_data(as_text=True)
+        self.assertIn("Начислено баллов</dt><dd>2", receipt)
+        self.assertIn("Баланс баллов</dt><dd>5", receipt)
+        self.assertNotIn("data:image/svg+xml;base64,", receipt)
+        self.assertNotIn("900", receipt)
+        self.assertNotIn("904", receipt)
+        with self.app.app_context():
+            self.assertEqual(
+                GuestLoyaltyClaim.query.filter_by(sale_id=sale_id).count(),
+                0,
+            )
+
+    def test_redemption_quote_checkout_and_receipt_use_net_paid_amount(self):
+        with self.app.app_context():
+            db.session.get(Product, self.ids["phone"]).selling_price = Decimal("100.00")
+            db.session.add(
+                LoyaltyTransaction(
+                    customer_id=self.ids["customer"],
+                    branch_id=self.ids["branch_a"],
+                    transaction_type="earn",
+                    points=200,
+                    operation_id="redemption-test-opening-balance",
+                )
+            )
+            db.session.commit()
+
+        client = self.client_for("employee")
+        quote = client.post(
+            "/sales/loyalty-quote",
+            json={
+                "customer_id": self.ids["customer"],
+                "items": [{"product_id": self.ids["phone"], "quantity": 2}],
+            },
+        )
+        self.assertEqual(quote.status_code, 200)
+        self.assertEqual(quote.json["available_points"], 200)
+        self.assertEqual(quote.json["maximum_redemption"], 40)
+
+        response = self.submit(
+            client,
+            [{"product_id": self.ids["phone"], "quantity": 2}],
+            customer_id=self.ids["customer"],
+            redeem_points=40,
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json["total_amount"], "200.00")
+        self.assertEqual(response.json["amount_paid"], "160.00")
+        self.assertEqual(response.json["redeemed_points"], 40)
+        self.assertEqual(response.json["earned_points"], 1)
+        self.assertEqual(response.json["customer_balance"], 161)
+
+        with self.app.app_context():
+            sale = db.session.get(Sale, response.json["sale_id"])
+            self.assertEqual(sale.total_amount, Decimal("200.00"))
+            self.assertEqual(sale.discount, Decimal("40.00"))
+            redemption = LoyaltyTransaction.query.filter_by(
+                sale_id=sale.id,
+                transaction_type="redeem",
+            ).one()
+            earning = LoyaltyTransaction.query.filter_by(
+                sale_id=sale.id,
+                transaction_type="earn",
+            ).one()
+            self.assertEqual(redemption.points, -40)
+            self.assertEqual(earning.points, 1)
+            self.assertEqual(redemption.branch_id, self.ids["branch_b"])
+            self.assertEqual(earning.branch_id, self.ids["branch_b"])
+
+        receipt_response = client.get(response.json["receipt_url"])
+        receipt = receipt_response.get_data(as_text=True)
+        self.assertIn("Сумма покупки</dt><dd>200.00", receipt)
+        self.assertIn("Списано бонусов</dt><dd>40 баллов", receipt)
+        self.assertIn("Фактически оплачено</dt><dd>160.00", receipt)
+        self.assertIn("Начислено баллов</dt><dd>1", receipt)
+        self.assertIn("Баланс баллов</dt><dd>161", receipt)
+
+    def test_redemption_above_cap_or_balance_is_rejected_without_mutations(self):
+        with self.app.app_context():
+            db.session.add(
+                LoyaltyTransaction(
+                    customer_id=self.ids["customer"],
+                    branch_id=self.ids["branch_a"],
+                    transaction_type="earn",
+                    points=500,
+                    operation_id="redemption-cap-opening-balance",
+                )
+            )
+            db.session.commit()
+
+        client = self.client_for("employee")
+        over_cap = self.submit(
+            client,
+            [{"product_id": self.ids["phone"], "quantity": 2}],
+            customer_id=self.ids["customer"],
+            redeem_points=5,
+        )
+        self.assertEqual(over_cap.status_code, 400)
+        self.assertIn("лимит 20%", over_cap.json["error"])
+
+        with self.app.app_context():
+            low_balance_customer = Customer(
+                name="Low balance customer",
+                registration_date=date(2025, 1, 1),
+            )
+            db.session.add(low_balance_customer)
+            db.session.flush()
+            db.session.add(
+                LoyaltyTransaction(
+                    customer_id=low_balance_customer.id,
+                    branch_id=self.ids["branch_a"],
+                    transaction_type="earn",
+                    points=2,
+                    operation_id="redemption-balance-opening",
+                )
+            )
+            db.session.get(Product, self.ids["phone"]).selling_price = Decimal("100.00")
+            db.session.commit()
+            low_customer_id = low_balance_customer.id
+
+        over_balance = self.submit(
+            client,
+            [{"product_id": self.ids["phone"], "quantity": 2}],
+            customer_id=low_customer_id,
+            redeem_points=3,
+        )
+        self.assertEqual(over_balance.status_code, 400)
+        self.assertIn("доступный баланс", over_balance.json["error"])
+        with self.app.app_context():
+            self.assertEqual(Sale.query.count(), 0)
+            self.assertEqual(
+                db.session.get(BranchInventory, self.ids["phone_inventory"]).stock_quantity,
+                2,
+            )
+            self.assertEqual(
+                db.session.query(db.func.sum(LoyaltyTransaction.points))
+                .filter_by(customer_id=low_customer_id)
+                .scalar(),
+                2,
+            )
+
+    def test_guest_cannot_redeem_and_redemption_failure_rolls_back_checkout(self):
+        guest_response = self.submit(
+            self.client_for("employee"),
+            [{"product_id": self.ids["phone"], "quantity": 1}],
+            redeem_points=1,
+        )
+        self.assertEqual(guest_response.status_code, 400)
+
+        with self.app.app_context():
+            db.session.add(
+                LoyaltyTransaction(
+                    customer_id=self.ids["customer"],
+                    branch_id=self.ids["branch_a"],
+                    transaction_type="earn",
+                    points=10,
+                    operation_id="rollback-opening-balance",
+                )
+            )
+            db.session.commit()
+            db.session.execute(
+                db.text(
+                    "CREATE TRIGGER fail_test_redemption BEFORE INSERT ON loyalty_transactions "
+                    "BEGIN SELECT RAISE(ABORT, 'forced ledger failure'); END"
+                )
+            )
+            db.session.commit()
+
+        failed = self.submit(
+            self.client_for("employee"),
+            [{"product_id": self.ids["phone"], "quantity": 1}],
+            customer_id=self.ids["customer"],
+            redeem_points=2,
+        )
+        self.assertEqual(failed.status_code, 500)
+        with self.app.app_context():
+            self.assertEqual(Sale.query.count(), 0)
+            self.assertEqual(SaleItem.query.count(), 0)
+            self.assertEqual(
+                db.session.get(BranchInventory, self.ids["phone_inventory"]).stock_quantity,
+                2,
+            )
+            self.assertEqual(
+                InventoryTransaction.query.filter_by(
+                    branch_inventory_id=self.ids["phone_inventory"]
+                ).count(),
+                0,
+            )
+            self.assertEqual(
+                LoyaltyTransaction.query.filter_by(
+                    customer_id=self.ids["customer"]
+                ).count(),
+                1,
+            )
+
+    def test_concurrent_redemptions_cannot_spend_the_same_balance(self):
+        with self.app.app_context():
+            db.session.get(Product, self.ids["phone"]).selling_price = Decimal("100.00")
+            db.session.add(
+                LoyaltyTransaction(
+                    customer_id=self.ids["customer"],
+                    branch_id=self.ids["branch_a"],
+                    transaction_type="earn",
+                    points=20,
+                    operation_id="concurrent-redemption-opening",
+                )
+            )
+            db.session.commit()
+        clients = [self.client_for("employee"), self.client_for("employee")]
+        barrier = Barrier(2)
+        results = []
+
+        def checkout(client):
+            barrier.wait()
+            results.append(
+                self.submit(
+                    client,
+                    [{"product_id": self.ids["phone"], "quantity": 1}],
+                    customer_id=self.ids["customer"],
+                    redeem_points=20,
+                )
+            )
+
+        threads = [
+            Thread(target=checkout, args=(client,))
+            for client in clients
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(sorted(result.status_code for result in results), [201, 400])
+        with self.app.app_context():
+            self.assertEqual(Sale.query.count(), 1)
+            self.assertEqual(
+                db.session.query(db.func.sum(LoyaltyTransaction.points))
+                .filter_by(customer_id=self.ids["customer"])
+                .scalar(),
+                0,
+            )
+
+    def test_earn_entry_cannot_be_duplicated_for_a_sale(self):
+        with self.app.app_context():
+            db.session.get(Product, self.ids["phone"]).selling_price = Decimal("100.00")
+            db.session.commit()
+        response = self.submit(
+            self.client_for("manager"),
+            [{"product_id": self.ids["case"], "quantity": 1}],
+            branch_id=self.ids["branch_a"],
+            customer_id=self.ids["customer"],
+        )
+        self.assertEqual(response.status_code, 201)
+        sale_id = response.json["sale_id"]
+
+        with self.app.app_context():
+            self.assertEqual(
+                LoyaltyTransaction.query.filter_by(
+                    sale_id=sale_id,
+                    transaction_type="earn",
+                ).count(),
+                0,
+            )
+
+        response = self.submit(
+            self.client_for("employee"),
+            [{"product_id": self.ids["phone"], "quantity": 2}],
+            customer_id=self.ids["customer"],
+        )
+        self.assertEqual(response.status_code, 201)
+        sale_id = response.json["sale_id"]
+
+        with self.app.app_context():
+            earned = LoyaltyTransaction.query.filter_by(
+                sale_id=sale_id,
+                transaction_type="earn",
+            ).one()
+            linked_sale = db.session.get(Sale, sale_id)
+            linked_claim = GuestLoyaltyClaim(
+                sale_id=sale_id,
+                branch_id=linked_sale.branch_id,
+                token_hash="a" * 64,
+                points=1,
+                expires_at=(
+                    datetime.now(timezone.utc).replace(tzinfo=None)
+                    + timedelta(days=7)
+                ),
+            )
+            db.session.add(linked_claim)
+            with self.assertRaises(IntegrityError):
+                db.session.flush()
+            db.session.rollback()
+
+        with self.app.app_context():
+            earned = LoyaltyTransaction.query.filter_by(
+                sale_id=sale_id,
+                transaction_type="earn",
+            ).one()
+            db.session.add(
+                LoyaltyTransaction(
+                    customer_id=self.ids["customer"],
+                    sale_id=sale_id,
+                    branch_id=self.ids["branch_b"],
+                    transaction_type="earn",
+                    points=earned.points,
+                    operation_id=f"duplicate-sale-{sale_id}-earn",
+                )
+            )
+            with self.assertRaises(IntegrityError):
+                db.session.flush()
+            db.session.rollback()
+            self.assertEqual(
+                LoyaltyTransaction.query.filter_by(
+                    sale_id=sale_id,
+                    transaction_type="earn",
+                ).count(),
+                1,
+            )
+
+    def test_guest_sale_receipt_has_repeatable_private_qr_and_unique_claim(self):
+        with self.app.app_context():
+            db.session.get(Product, self.ids["phone"]).selling_price = Decimal("50.00")
+            db.session.commit()
+        client = self.client_for("employee")
+        checkout = self.submit(
+            client,
+            [{"product_id": self.ids["phone"], "quantity": 2}],
+        )
+        self.assertEqual(checkout.status_code, 201)
+        sale_id = checkout.json["sale_id"]
+        self.assertNotIn("token", checkout.json)
+        self.assertNotIn("claim_token", checkout.json)
+        set_cookie = checkout.headers["Set-Cookie"]
+        self.assertIn("HttpOnly", set_cookie)
+        self.assertIn("Secure", set_cookie)
+        self.assertIn("SameSite=Strict", set_cookie)
+        cookie_name = f"bms_guest_claim_{sale_id}"
+        token = client.get_cookie(
+            cookie_name,
+            path=checkout.json["receipt_url"],
+        )
+        self.assertIsNotNone(token)
+        token = token.value
+
+        with self.app.app_context():
+            sale = db.session.get(Sale, sale_id)
+            claim = GuestLoyaltyClaim.query.filter_by(sale_id=sale_id).one()
+            self.assertIsNone(sale.customer_id)
+            self.assertEqual(claim.branch_id, sale.branch_id)
+            self.assertEqual(claim.branch_id, self.ids["branch_b"])
+            self.assertEqual(claim.points, 1)
+            self.assertEqual(
+                claim.token_hash,
+                hashlib.sha256(token.encode("ascii")).hexdigest(),
+            )
+            self.assertNotEqual(claim.token_hash, token)
+            self.assertLess(
+                abs(
+                    (claim.expires_at - claim.created_at)
+                    - timedelta(days=7)
+                ).total_seconds(),
+                2,
+            )
+            self.assertEqual(LoyaltyTransaction.query.filter_by(sale_id=sale_id).count(), 0)
+
+        first_receipt = client.get(
+            checkout.json["receipt_url"],
+            base_url="https://localhost",
+        )
+        second_receipt = client.get(
+            checkout.json["receipt_url"],
+            base_url="https://localhost",
+        )
+        self.assertEqual(first_receipt.status_code, 200)
+        self.assertEqual(second_receipt.status_code, 200)
+        for response in (first_receipt, second_receipt):
+            html = response.get_data(as_text=True)
+            self.assertIn("data:image/svg+xml;base64,", html)
+            self.assertIn("можно получить 1 бонусных баллов", html)
+            self.assertNotIn(token, html)
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+        with self.app.app_context():
+            self.assertEqual(GuestLoyaltyClaim.query.filter_by(sale_id=sale_id).count(), 1)
+            duplicate = GuestLoyaltyClaim(
+                sale_id=sale_id,
+                branch_id=self.ids["branch_b"],
+                token_hash="f" * 64,
+                points=1,
+                expires_at=(
+                    datetime.now(timezone.utc).replace(tzinfo=None)
+                    + timedelta(days=7)
+                ),
+            )
+            db.session.add(duplicate)
+            with self.assertRaises(IntegrityError):
+                db.session.flush()
+            db.session.rollback()
+
+        self.app.config["LOYALTY_CLAIM_TTL_DAYS"] = 2
+        second_checkout = self.submit(
+            self.client_for("manager"),
+            [{"product_id": self.ids["case"], "quantity": 1}],
+            branch_id=self.ids["branch_a"],
+        )
+        self.assertEqual(second_checkout.status_code, 201)
+        with self.app.app_context():
+            second_claim = GuestLoyaltyClaim.query.filter_by(
+                sale_id=second_checkout.json["sale_id"]
+            ).one()
+            first_claim = GuestLoyaltyClaim.query.filter_by(sale_id=sale_id).one()
+            self.assertNotEqual(first_claim.token_hash, second_claim.token_hash)
+            self.assertEqual(second_claim.branch_id, self.ids["branch_a"])
+            self.assertLess(
+                abs(
+                    (second_claim.expires_at - second_claim.created_at)
+                    - timedelta(days=2)
+                ).total_seconds(),
+                2,
+            )
+
+    def test_public_claim_validation_is_read_only_and_reports_safe_states(self):
+        with self.app.app_context():
+            db.session.get(Product, self.ids["phone"]).selling_price = Decimal("50.00")
+            db.session.commit()
+        client = self.client_for("employee")
+        checkout = self.submit(
+            client,
+            [{"product_id": self.ids["phone"], "quantity": 2}],
+        )
+        self.assertEqual(checkout.status_code, 201)
+        sale_id = checkout.json["sale_id"]
+        token = client.get_cookie(
+            f"bms_guest_claim_{sale_id}",
+            path=checkout.json["receipt_url"],
+        ).value
+
+        landing = self.app.test_client().get("/loyalty/claim")
+        self.assertEqual(landing.status_code, 200)
+        self.assertIn("войти или зарегистрироваться".encode(), landing.data)
+        self.assertNotIn(token.encode(), landing.data)
+        self.assertEqual(landing.headers["Referrer-Policy"], "no-referrer")
+
+        public_client = self.app.test_client()
+        first = public_client.post(
+            "/loyalty/claim/validate",
+            json={"token": token},
+        )
+        second = public_client.post(
+            "/loyalty/claim/validate",
+            json={"token": token},
+        )
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json["status"], "available")
+        self.assertEqual(first.json["points"], 1)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json["points"], 1)
+        self.assertNotIn("sale_id", first.json)
+        self.assertNotIn("customer", first.json)
+        self.assertEqual(first.headers["Cache-Control"], "no-store")
+
+        invalid = public_client.post(
+            "/loyalty/claim/validate",
+            json={"token": "A" * 43},
+        )
+        malformed = public_client.post(
+            "/loyalty/claim/validate",
+            json={"token": "not-a-token"},
+        )
+        self.assertEqual(invalid.status_code, 404)
+        self.assertEqual(invalid.json["status"], "invalid")
+        self.assertEqual(malformed.status_code, 404)
+
+        with self.app.app_context():
+            expired_sale = Sale(
+                branch_id=self.ids["branch_b"],
+                customer_id=None,
+                total_amount=Decimal("40.00"),
+                discount=Decimal("0.00"),
+                payment_method="cash",
+            )
+            db.session.add(expired_sale)
+            db.session.flush()
+            expired_token = "E" * 43
+            db.session.add(
+                GuestLoyaltyClaim(
+                    sale_id=expired_sale.id,
+                    branch_id=self.ids["branch_b"],
+                    token_hash=hashlib.sha256(
+                        expired_token.encode("ascii")
+                    ).hexdigest(),
+                    points=2,
+                    expires_at=(
+                        datetime.now(timezone.utc).replace(tzinfo=None)
+                        - timedelta(seconds=1)
+                    ),
+                )
+            )
+            db.session.commit()
+        expired = public_client.post(
+            "/loyalty/claim/validate",
+            json={"token": expired_token},
+        )
+        self.assertEqual(expired.status_code, 410)
+        self.assertEqual(expired.json["status"], "expired")
+
+        with self.app.app_context():
+            claimed_sale = Sale(
+                branch_id=self.ids["branch_b"],
+                customer_id=None,
+                total_amount=Decimal("40.00"),
+                discount=Decimal("0.00"),
+                payment_method="cash",
+            )
+            db.session.add(claimed_sale)
+            db.session.flush()
+            claimed_token = "C" * 43
+            db.session.add(
+                GuestLoyaltyClaim(
+                    sale_id=claimed_sale.id,
+                    branch_id=self.ids["branch_b"],
+                    token_hash=hashlib.sha256(
+                        claimed_token.encode("ascii")
+                    ).hexdigest(),
+                    points=2,
+                    expires_at=(
+                        datetime.now(timezone.utc).replace(tzinfo=None)
+                        + timedelta(days=7)
+                    ),
+                    claimed_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                )
+            )
+            db.session.commit()
+        claimed = public_client.post(
+            "/loyalty/claim/validate",
+            json={"token": claimed_token},
+        )
+        self.assertEqual(claimed.status_code, 409)
+        self.assertEqual(claimed.json["status"], "claimed")
+        with self.app.app_context():
+            self.assertEqual(LoyaltyTransaction.query.filter_by(sale_id=sale_id).count(), 0)
+
+    def test_claim_validation_is_rate_limited(self):
+        self.app.config["LOYALTY_CLAIM_RATE_LIMIT"] = 1
+        client = self.app.test_client()
+        first = client.post("/loyalty/claim/validate", json={"token": "bad"})
+        second = client.post("/loyalty/claim/validate", json={"token": "bad"})
+        self.assertEqual(first.status_code, 404)
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.headers["Retry-After"], "60")
+
+    def test_public_base_url_must_be_reachable_https(self):
+        for invalid_url in (
+            "http://bms.example.test",
+            "https://localhost",
+            "https://127.0.0.1",
+            "https://[::1]",
+        ):
+            with self.subTest(public_base_url=invalid_url):
+                with self.assertRaises(ValueError):
+                    create_app(
+                        {
+                            "TESTING": True,
+                            "SQLALCHEMY_DATABASE_URI": "sqlite://",
+                            "PUBLIC_BASE_URL": invalid_url,
+                        }
+                    )
 
     def test_invalid_cart_payment_customer_and_branch_do_not_mutate(self):
         client = self.client_for("manager")
@@ -375,21 +1023,26 @@ class SalesCheckoutTests(unittest.TestCase):
             self.assertEqual(other_branch_notifications, [])
 
     def test_failure_after_stock_update_rolls_back_everything(self):
+        with self.app.app_context():
+            db.session.get(Product, self.ids["phone"]).selling_price = Decimal("100.00")
+            db.session.commit()
+
         def fail_sale_out_flush(session, flush_context, instances):
             del flush_context, instances
             if any(
-                isinstance(item, InventoryTransaction)
-                and item.transaction_type == "sale_out"
+                isinstance(item, LoyaltyTransaction)
+                and item.transaction_type == "earn"
                 for item in session.new
             ):
-                raise RuntimeError("injected checkout failure")
+                raise RuntimeError("injected loyalty flush failure")
 
         event.listen(Session, "before_flush", fail_sale_out_flush)
         try:
             response = self.submit(
-                self.client_for("admin"),
-                [{"product_id": self.ids["case"], "quantity": 2}],
+                self.client_for("employee"),
+                [{"product_id": self.ids["phone"], "quantity": 2}],
                 branch_id=self.ids["branch_a"],
+                customer_id=self.ids["customer"],
             )
         finally:
             event.remove(Session, "before_flush", fail_sale_out_flush)
@@ -399,12 +1052,44 @@ class SalesCheckoutTests(unittest.TestCase):
             self.assertEqual(Sale.query.count(), 0)
             self.assertEqual(SaleItem.query.count(), 0)
             self.assertEqual(InventoryTransaction.query.count(), 0)
+            self.assertEqual(LoyaltyTransaction.query.count(), 0)
             self.assertEqual(
                 db.session.get(
                     BranchInventory,
-                    self.ids["case_a_inventory"],
+                    self.ids["phone_inventory"],
                 ).stock_quantity,
-                4,
+                2,
+            )
+
+    def test_guest_claim_failure_rolls_back_sale_inventory_and_cookie(self):
+        def fail_claim_flush(session, flush_context, instances):
+            del flush_context, instances
+            if any(isinstance(item, GuestLoyaltyClaim) for item in session.new):
+                raise RuntimeError("injected guest-claim flush failure")
+
+        client = self.client_for("employee")
+        event.listen(Session, "before_flush", fail_claim_flush)
+        try:
+            response = self.submit(
+                client,
+                [{"product_id": self.ids["phone"], "quantity": 2}],
+            )
+        finally:
+            event.remove(Session, "before_flush", fail_claim_flush)
+
+        self.assertEqual(response.status_code, 500)
+        self.assertNotIn("bms_guest_claim_", response.headers.get("Set-Cookie", ""))
+        with self.app.app_context():
+            self.assertEqual(Sale.query.count(), 0)
+            self.assertEqual(SaleItem.query.count(), 0)
+            self.assertEqual(InventoryTransaction.query.count(), 0)
+            self.assertEqual(GuestLoyaltyClaim.query.count(), 0)
+            self.assertEqual(
+                db.session.get(
+                    BranchInventory,
+                    self.ids["phone_inventory"],
+                ).stock_quantity,
+                2,
             )
 
     def test_simultaneous_checkouts_cannot_oversell_final_unit(self):

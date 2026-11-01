@@ -6,6 +6,7 @@
 {% block content %}
 <section class="pos-page"
     data-checkout-url="{{ url_for('sales_checkout') }}"
+    data-loyalty-quote-url="{{ url_for('sales_loyalty_quote') }}"
     {% if can_select_branch and selected_branch %}data-branch-id="{{ selected_branch.id }}"{% endif %}>
     <div class="pos-feedback" id="pos-feedback" role="status" aria-live="polite" hidden></div>
     <div class="sales-page-actions">
@@ -123,6 +124,13 @@
                     <option value="{{ customer.id }}">{{ customer.name }}</option>
                     {% endfor %}
                 </select>
+                <section class="pos-loyalty-panel" id="pos-loyalty-panel" hidden>
+                    <p>Доступный баланс: <strong id="pos-loyalty-balance">0</strong> баллов</p>
+                    <p>Максимальное списание: <strong id="pos-loyalty-maximum">0</strong> баллов</p>
+                    <label for="pos-redeem-points">Списать бонусы</label>
+                    <input id="pos-redeem-points" type="number" min="0" step="1" value="0" inputmode="numeric">
+                    <p class="pos-loyalty-error" id="pos-loyalty-error" role="status" hidden></p>
+                </section>
             </div>
 
             <button class="pos-checkout-button" id="pos-checkout" type="button" disabled>Оформить продажу</button>

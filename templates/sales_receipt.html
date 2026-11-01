@@ -54,11 +54,36 @@
         </div>
 
         <dl class="receipt-totals">
-            {% if sale.discount is not none and sale.discount != 0 %}
+            <div><dt>Сумма покупки</dt><dd>{{ '%.2f'|format(sale.total_amount) }}</dd></div>
+            {% if redeemed_points %}
+            <div><dt>Списано бонусов</dt><dd>{{ redeemed_points }} баллов</dd></div>
+            <div><dt>Бонусная скидка</dt><dd>{{ '%.2f'|format(redeemed_points) }}</dd></div>
+            {% elif sale.discount is not none and sale.discount != 0 %}
             <div><dt>Скидка</dt><dd>{{ '%.2f'|format(sale.discount) }}</dd></div>
             {% endif %}
-            <div class="receipt-final-total"><dt>Итого</dt><dd>{{ '%.2f'|format(sale.total_amount) }}</dd></div>
+            <div class="receipt-final-total"><dt>Фактически оплачено</dt><dd>{{ '%.2f'|format(amount_paid) }}</dd></div>
         </dl>
+        {% if customer %}
+        <dl class="receipt-totals receipt-loyalty">
+            <div><dt>Начислено баллов</dt><dd>{{ earned_points }}</dd></div>
+            <div><dt>Баланс баллов</dt><dd>{{ customer_balance }}</dd></div>
+        </dl>
+        {% elif claim_qr_data_uri %}
+        <section class="receipt-loyalty-claim">
+            <h3>Получите бонусные баллы</h3>
+            <img
+                src="{{ claim_qr_data_uri }}"
+                alt="QR-код для получения бонусных баллов"
+                width="220"
+                height="220">
+            <p>За эту покупку можно получить {{ claim_points }} бонусных баллов.</p>
+            <p>Для получения баллов потребуется вход или регистрация клиента.</p>
+        </section>
+        {% elif not claim_link_configured %}
+        <p class="receipt-loyalty-setup">
+            QR-код временно недоступен. Настройте публичный HTTPS-адрес системы.
+        </p>
+        {% endif %}
     </article>
 </section>
 {% endblock %}

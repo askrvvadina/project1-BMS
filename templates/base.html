@@ -35,6 +35,8 @@
                         ('Склад', 'inventory'),
                         ('Продажи', 'sales'),
                         ('Клиенты', 'customers'),
+                        ('Расходы', 'expenses'),
+                        ('Категории расходов', 'expense_categories'),
                         ('Аналитика', 'analytics')
                     ] %}
                 {% elif role == 'manager' %}
@@ -47,13 +49,17 @@
                         ('Склад', 'inventory'),
                         ('Продажи', 'sales'),
                         ('Клиенты', 'customers'),
+                        ('Расходы', 'expenses'),
+                        ('Категории расходов', 'expense_categories'),
                         ('Аналитика', 'analytics')
                     ] %}
                 {% elif role == 'employee' %}
                     {% set nav_items = [
                         ('Главная', 'home'),
                         ('Товары', 'products'),
-                        ('Продажи', 'sales')
+                        ('Продажи', 'sales'),
+                        ('Клиенты', 'customers'),
+                        ('Расходы', 'expenses')
                     ] %}
                 {% else %}
                     {% set nav_items = [] %}

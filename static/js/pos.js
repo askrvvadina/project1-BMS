@@ -10,9 +10,15 @@ document.addEventListener('DOMContentLoaded', function () {
     const feedback = document.getElementById('pos-feedback');
     const paymentSelect = document.getElementById('pos-payment');
     const customerSelect = document.getElementById('pos-customer');
+    const loyaltyPanel = document.getElementById('pos-loyalty-panel');
+    const loyaltyBalance = document.getElementById('pos-loyalty-balance');
+    const loyaltyMaximum = document.getElementById('pos-loyalty-maximum');
+    const redeemPointsInput = document.getElementById('pos-redeem-points');
+    const loyaltyError = document.getElementById('pos-loyalty-error');
     const posPage = document.querySelector('.pos-page');
     const cart = new Map();
     let isSubmitting = false;
+    let quoteRequest = 0;
 
     if (!cartContainer || !emptyCart || !totalElement || !clearButton) {
         return;
@@ -35,6 +41,65 @@ document.addEventListener('DOMContentLoaded', function () {
             button.disabled = isSubmitting || stock <= 0 || quantity >= stock;
             button.textContent = quantity >= stock && stock > 0 ? 'В корзине всё количество' : 'Добавить';
         });
+    };
+
+    const refreshLoyaltyQuote = async function () {
+        const requestNumber = ++quoteRequest;
+        if (!loyaltyPanel || !customerSelect || !customerSelect.value || cart.size === 0) {
+            if (loyaltyPanel) {
+                loyaltyPanel.hidden = true;
+            }
+            if (redeemPointsInput) {
+                redeemPointsInput.value = '0';
+            }
+            return;
+        }
+
+        loyaltyPanel.hidden = false;
+        if (loyaltyError) {
+            loyaltyError.hidden = true;
+            loyaltyError.textContent = '';
+        }
+        const payload = {
+            customer_id: Number.parseInt(customerSelect.value, 10),
+            items: Array.from(cart.entries()).map(function (entry) {
+                return {
+                    product_id: Number.parseInt(entry[0], 10),
+                    quantity: entry[1].quantity
+                };
+            })
+        };
+        if (posPage && posPage.dataset.branchId) {
+            payload.branch_id = Number.parseInt(posPage.dataset.branchId, 10);
+        }
+
+        try {
+            const response = await fetch(posPage.dataset.loyaltyQuoteUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                throw new Error(result.error || 'Не удалось рассчитать бонусы.');
+            }
+            if (requestNumber !== quoteRequest) {
+                return;
+            }
+            loyaltyBalance.textContent = String(result.available_points);
+            loyaltyMaximum.textContent = String(result.maximum_redemption);
+            redeemPointsInput.max = String(result.maximum_redemption);
+        } catch (error) {
+            if (requestNumber !== quoteRequest) {
+                return;
+            }
+            loyaltyBalance.textContent = '—';
+            loyaltyMaximum.textContent = '—';
+            if (loyaltyError) {
+                loyaltyError.hidden = false;
+                loyaltyError.textContent = error.message;
+            }
+        }
     };
 
     const renderCart = function () {
@@ -110,6 +175,7 @@ document.addEventListener('DOMContentLoaded', function () {
             checkoutButton.disabled = isSubmitting || cart.size === 0;
         }
         updateCatalogButtons();
+        refreshLoyaltyQuote();
     };
 
     productCards.forEach(function (card) {
@@ -169,6 +235,10 @@ document.addEventListener('DOMContentLoaded', function () {
         renderCart();
     });
 
+    if (customerSelect) {
+        customerSelect.addEventListener('change', refreshLoyaltyQuote);
+    }
+
     if (checkoutButton && posPage) {
         checkoutButton.addEventListener('click', async function () {
             if (isSubmitting || cart.size === 0) {
@@ -184,19 +254,31 @@ document.addEventListener('DOMContentLoaded', function () {
                 }),
                 payment_method: paymentSelect ? paymentSelect.value : ''
             };
+            if (redeemPointsInput && redeemPointsInput.value) {
+                const requestedPoints = Number(redeemPointsInput.value);
+                if (!Number.isSafeInteger(requestedPoints) || requestedPoints < 0) {
+                    if (feedback) {
+                        feedback.hidden = false;
+                        feedback.className = 'pos-feedback is-error';
+                        feedback.textContent = 'Количество списываемых баллов должно быть целым неотрицательным числом.';
+                    }
+                    return;
+                }
+                payload.redeem_points = requestedPoints;
+            }
             if (posPage.dataset.branchId) {
                 payload.branch_id = Number.parseInt(posPage.dataset.branchId, 10);
             }
             if (customerSelect && customerSelect.value) {
                 payload.customer_id = Number.parseInt(customerSelect.value, 10);
             }
-
             isSubmitting = true;
             if (feedback) {
                 feedback.hidden = false;
                 feedback.className = 'pos-feedback is-pending';
                 feedback.textContent = 'Оформляем продажу…';
             }
+
             checkoutButton.textContent = 'Оформление…';
             renderCart();
 
@@ -245,7 +327,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     feedback.className = 'pos-feedback is-success';
                     feedback.replaceChildren(
                         document.createTextNode(
-                            'Продажа №' + result.sale_id + ' оформлена. Итого: ' + result.total_amount + '. '
+                            'Продажа №' + result.sale_id + ' оформлена. Оплачено: ' +
+                            result.amount_paid + '. Списано: ' + result.redeemed_points +
+                            ', начислено: ' + result.earned_points + ' баллов. '
                         )
                     );
                     const receiptLink = document.createElement('a');
