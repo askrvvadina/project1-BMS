@@ -26,6 +26,7 @@ from app.guest_loyalty import (
 )
 from app.loyalty import calculate_earned_points, calculate_redemption_limit
 from app.financial import (
+    calculate_branch_performance,
     calculate_category_sales,
     calculate_daily_sales_revenue,
     calculate_financial_summary,
@@ -36,6 +37,11 @@ from app.financial import (
 
 
 db = SQLAlchemy()
+
+from app.sales_targets import (
+    calculate_branch_target_progress,
+    update_branch_sales_targets,
+)
 
 
 def discover_local_ipv4():
@@ -4053,14 +4059,93 @@ def create_app(config=None):
         flash("Расход удалён.", "success")
         return redirect(url_for("expenses"))
 
-    @app.route("/analytics")
+    @app.route("/branch-analytics")
     @login_required
-    @role_required("admin", "manager")
+    @role_required("admin", "manager", "employee")
     def analytics():
-        return render_template(
-            "placeholder.html",
-            page_title="Аналитика",
-            message="Аналитика и отчёты будут добавлены на следующем этапе разработки."
+        user = db.session.get(models.User, session.get("user_id"))
+        if user is None:
+            session.clear()
+            flash("Сеанс завершён. Войдите в систему снова.", "error")
+            return redirect(url_for("login"))
+
+        role = (user.role or "").lower()
+        if role == "employee":
+            assigned_branch_id = models.resolve_employee_branch_id(user)
+            if assigned_branch_id is None:
+                return render_template("403.html", requested_path=request.path), 403
+            authorized_branch_ids = [assigned_branch_id]
+        elif role in {"admin", "manager"}:
+            authorized_branch_ids = [
+                branch.id for branch in models.Branch.query.order_by(models.Branch.name.asc()).all()
+            ]
+        else:
+            return render_template("403.html", requested_path=request.path), 403
+
+        today = date.today()
+        default_start = today.replace(day=1)
+        try:
+            default_start = (datetime(today.year, today.month, 1) - timedelta(days=334)).date()
+        except ValueError:
+            default_start = today - timedelta(days=334)
+        start_value = request.args.get("start_date", default_start.isoformat()).strip()
+        end_value = request.args.get("end_date", today.isoformat()).strip()
+
+        invalid_dates = False
+        try:
+            date_from = date.fromisoformat(start_value)
+        except (TypeError, ValueError):
+            date_from = default_start
+            invalid_dates = True
+        try:
+            date_to = date.fromisoformat(end_value)
+        except (TypeError, ValueError):
+            date_to = today
+            invalid_dates = True
+        if date_from > date_to:
+            invalid_dates = True
+        if invalid_dates:
+            flash("Некорректный диапазон дат. Исправьте начальную и конечную даты.", "error")
+
+        branch_performance = calculate_branch_performance(
+            date_from=date_from,
+            date_to=date_to,
+            authorized_branch_ids=authorized_branch_ids,
         )
+        target_progress = calculate_branch_target_progress(authorized_branch_ids, today)
+        return render_template(
+            "branch_analytics.html",
+            branch_performance=branch_performance,
+            target_progress=target_progress,
+            can_edit_targets=(role == "admin"),
+            current_progress_date=today.isoformat(),
+            filter_start_date=start_value if invalid_dates else date_from.isoformat(),
+            filter_end_date=end_value if invalid_dates else date_to.isoformat(),
+        )
+
+    @app.route("/branch-analytics/<int:branch_id>/targets", methods=["POST"])
+    @login_required
+    @role_required("admin")
+    def update_branch_targets(branch_id):
+        user = db.session.get(models.User, session.get("user_id"))
+        if user is None:
+            session.clear()
+            flash("Сеанс завершён. Войдите в систему снова.", "error")
+            return redirect(url_for("login"))
+        if db.session.get(models.Branch, branch_id) is None:
+            flash("Филиал не найден.", "error")
+            return redirect(url_for("analytics"))
+        try:
+            update_branch_sales_targets(
+                branch_id,
+                request.form.get("daily_target", ""),
+                request.form.get("monthly_target", ""),
+                user,
+            )
+        except (ValueError, PermissionError) as error:
+            flash(str(error), "error")
+            return redirect(url_for("analytics"))
+        flash("Цели продаж филиала обновлены.", "success")
+        return redirect(url_for("analytics"))
 
     return app

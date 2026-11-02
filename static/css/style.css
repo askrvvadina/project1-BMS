@@ -3656,3 +3656,87 @@ textarea,
         margin-top: 1rem;
     }
 }
+
+.branch-target-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+}
+
+.branch-target-card {
+    min-width: 0;
+}
+
+.target-period {
+    margin-top: 14px;
+}
+
+.target-period-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+    font-size: 0.88rem;
+}
+
+.target-period-head span {
+    color: var(--color-text-muted);
+    text-align: right;
+}
+
+.target-progress-track {
+    height: 9px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: #e6ece8;
+}
+
+.target-progress-track span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--color-primary);
+}
+
+.target-period p,
+.target-status {
+    margin: 7px 0 0;
+    color: var(--color-text-muted);
+    font-size: 0.82rem;
+}
+
+.branch-target-form {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 16px;
+}
+
+.branch-target-form label {
+    display: grid;
+    gap: 6px;
+    color: var(--color-text-muted);
+    font-size: 0.82rem;
+}
+
+.branch-target-form input {
+    min-height: 38px;
+    width: 100%;
+    padding: 7px 9px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+}
+
+.branch-target-form .primary-btn {
+    grid-column: 1 / -1;
+}
+
+@media (max-width: 560px) {
+    .branch-target-form {
+        grid-template-columns: 1fr;
+    }
+
+    .branch-target-form .primary-btn {
+        grid-column: auto;
+    }
+}

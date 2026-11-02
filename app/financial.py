@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, date
 from decimal import Decimal
 
+from sqlalchemy import and_
+
 ZERO = Decimal("0.00")
 
 
@@ -140,6 +142,92 @@ def calculate_period_sales_revenue(created_at_column, period_format, start_at, e
         discount_decimal = Decimal(str(discount))
         result[period_key] = gross_decimal - discount_decimal
     return result
+
+
+def calculate_branch_performance(
+    date_from=None,
+    date_to=None,
+    authorized_branch_ids=None,
+    branch_ids=None,
+):
+    """Calculate grouped actual-paid sales metrics for an explicit branch scope."""
+    from app import db, models
+
+    if authorized_branch_ids is not None and branch_ids is not None:
+        raise ValueError("Specify only one branch scope argument")
+
+    scope = authorized_branch_ids if authorized_branch_ids is not None else branch_ids
+    if scope is None:
+        return []
+
+    if isinstance(scope, (str, bytes)):
+        scope = [scope]
+    else:
+        try:
+            scope = list(scope)
+        except TypeError:
+            scope = [scope]
+
+    normalized_scope = []
+    for raw_id in scope:
+        if isinstance(raw_id, bool):
+            raise ValueError("Branch IDs must be integers")
+        if isinstance(raw_id, int):
+            branch_id = raw_id
+        elif isinstance(raw_id, str) and raw_id.strip().isdigit():
+            branch_id = int(raw_id.strip())
+        else:
+            raise ValueError("Branch IDs must be integers")
+        if branch_id <= 0:
+            raise ValueError("Branch IDs must be positive integers")
+        if branch_id not in normalized_scope:
+            normalized_scope.append(branch_id)
+
+    if not normalized_scope:
+        return []
+
+    sale_conditions = [models.Sale.branch_id == models.Branch.id]
+    if date_from is not None:
+        sale_conditions.append(
+            models.Sale.created_at >= datetime.combine(date_from, datetime.min.time())
+        )
+    if date_to is not None:
+        sale_conditions.append(
+            models.Sale.created_at < datetime.combine(date_to + timedelta(days=1), datetime.min.time())
+        )
+
+    paid_amount = models.Sale.total_amount - db.func.coalesce(models.Sale.discount, 0)
+    rows = db.session.query(
+        models.Branch.id.label("branch_id"),
+        models.Branch.name.label("branch_name"),
+        db.func.coalesce(db.func.sum(paid_amount), 0).label("actual_paid_revenue"),
+        db.func.count(models.Sale.id).label("sales_count"),
+    ).outerjoin(
+        models.Sale,
+        and_(*sale_conditions),
+    ).filter(
+        models.Branch.id.in_(normalized_scope)
+    ).group_by(
+        models.Branch.id,
+        models.Branch.name,
+    ).order_by(
+        models.Branch.name.asc(),
+        models.Branch.id.asc(),
+    ).all()
+
+    performance = []
+    for branch_id, branch_name, actual_paid_revenue, sales_count in rows:
+        revenue = Decimal(str(actual_paid_revenue)).quantize(Decimal("0.01"))
+        count = int(sales_count)
+        average = (revenue / count).quantize(Decimal("0.01")) if count else ZERO
+        performance.append({
+            "branch_id": branch_id,
+            "branch_name": branch_name,
+            "actual_paid_revenue": revenue,
+            "sales_count": count,
+            "average_transaction_value": average,
+        })
+    return performance
 
 
 def calculate_top_products(limit=5, branch_id=None, date_from=None, date_to=None):

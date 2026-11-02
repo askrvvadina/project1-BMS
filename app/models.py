@@ -1,5 +1,6 @@
 from app import db
 from datetime import datetime, timezone
+from decimal import Decimal
 from sqlalchemy import DDL, event
 
 
@@ -41,6 +42,28 @@ class Branch(db.Model):
     phone = db.Column(db.String(30))
     status = db.Column(db.String(20), nullable=False, default="active")
     inventory_items = db.relationship("BranchInventory", back_populates="branch")
+    sales_target = db.relationship(
+        "BranchSalesTarget",
+        back_populates="branch",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class BranchSalesTarget(db.Model):
+    __tablename__ = "branch_sales_targets"
+    __table_args__ = (
+        db.UniqueConstraint("branch_id", name="uq_branch_sales_targets_branch"),
+        db.CheckConstraint("daily_target >= 0", name="ck_branch_sales_targets_daily_nonnegative"),
+        db.CheckConstraint("monthly_target >= 0", name="ck_branch_sales_targets_monthly_nonnegative"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    branch_id = db.Column(db.Integer, db.ForeignKey("branches.id", ondelete="CASCADE"), nullable=False)
+    daily_target = db.Column(db.Numeric(12, 2), nullable=False, default=Decimal("15000.00"))
+    monthly_target = db.Column(db.Numeric(12, 2), nullable=False, default=Decimal("450000.00"))
+
+    branch = db.relationship("Branch", back_populates="sales_target")
 
 
 class Employee(db.Model):

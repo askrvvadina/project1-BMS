@@ -37,7 +37,7 @@
                         ('Клиенты', 'customers'),
                         ('Расходы', 'expenses'),
                         ('Категории расходов', 'expense_categories'),
-                        ('Аналитика', 'analytics')
+                        ('Аналитика филиалов', 'analytics')
                     ] %}
                 {% elif role == 'manager' %}
                     {% set nav_items = [
@@ -51,7 +51,7 @@
                         ('Клиенты', 'customers'),
                         ('Расходы', 'expenses'),
                         ('Категории расходов', 'expense_categories'),
-                        ('Аналитика', 'analytics')
+                        ('Аналитика филиалов', 'analytics')
                     ] %}
                 {% elif role == 'employee' %}
                     {% set nav_items = [
@@ -59,7 +59,8 @@
                         ('Товары', 'products'),
                         ('Продажи', 'sales'),
                         ('Клиенты', 'customers'),
-                        ('Расходы', 'expenses')
+                        ('Расходы', 'expenses'),
+                        ('Аналитика филиалов', 'analytics')
                     ] %}
                 {% else %}
                     {% set nav_items = [] %}

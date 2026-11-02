@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}Аналитика филиалов{% endblock %}
+{% block page_title %}Аналитика филиалов{% endblock %}
+
+{% block content %}
+<section class="panel-card dashboard-filter-card" aria-label="Фильтры аналитики филиалов">
+    <form method="get" action="{{ url_for('analytics') }}" class="dashboard-filter-form">
+        <div class="dashboard-filter-field">
+            <label for="branchAnalyticsStartDate">Начальная дата</label>
+            <input id="branchAnalyticsStartDate" type="date" name="start_date" value="{{ filter_start_date }}">
+        </div>
+        <div class="dashboard-filter-field">
+            <label for="branchAnalyticsEndDate">Конечная дата</label>
+            <input id="branchAnalyticsEndDate" type="date" name="end_date" value="{{ filter_end_date }}">
+        </div>
+        <div class="dashboard-filter-actions">
+            <button class="primary-btn" type="submit">Применить фильтры</button>
+            <a class="secondary-btn" href="{{ url_for('analytics') }}">Сбросить</a>
+        </div>
+    </form>
+</section>
+
+<section class="panel-card branch-target-progress">
+    <div class="panel-header">
+        <div>
+            <h3>Текущие цели продаж</h3>
+            <p class="dashboard-chart-empty">Актуально на {{ current_progress_date }}. Не зависит от фильтра истории.</p>
+        </div>
+    </div>
+    {% if target_progress %}
+    <div class="branch-target-grid">
+        {% for branch in target_progress %}
+        <article class="panel-card branch-target-card">
+            <div class="panel-header"><h3>{{ branch.branch_name }}</h3></div>
+            <div class="target-period">
+                <div class="target-period-head"><strong>День</strong><span>{{ '%.2f'|format(branch.daily_revenue) }} / {{ 'Не задан' if branch.daily_is_unset else ('%.2f сом'|format(branch.daily_target)) }}</span></div>
+                {% if branch.daily_is_unset %}
+                <span class="target-status">Не задан</span>
+                {% else %}
+                <div class="target-progress-track" role="progressbar" aria-valuemin="0" aria-valuenow="{{ [branch.daily_achievement_percentage, 100]|min }}" aria-valuemax="100">
+                    <span style="width: {{ [branch.daily_achievement_percentage, 100]|min }}%"></span>
+                </div>
+                <p>{{ '%.2f'|format(branch.daily_achievement_percentage) }}% выполнено; осталось {{ '%.2f'|format(branch.daily_remaining_amount) }} сом</p>
+                {% endif %}
+            </div>
+            <div class="target-period">
+                <div class="target-period-head"><strong>Месяц</strong><span>{{ '%.2f'|format(branch.monthly_revenue) }} / {{ 'Не задан' if branch.monthly_is_unset else ('%.2f сом'|format(branch.monthly_target)) }}</span></div>
+                {% if branch.monthly_is_unset %}
+                <span class="target-status">Не задан</span>
+                {% else %}
+                <div class="target-progress-track" role="progressbar" aria-valuemin="0" aria-valuenow="{{ [branch.monthly_achievement_percentage, 100]|min }}" aria-valuemax="100">
+                    <span style="width: {{ [branch.monthly_achievement_percentage, 100]|min }}%"></span>
+                </div>
+                <p>{{ '%.2f'|format(branch.monthly_achievement_percentage) }}% выполнено; осталось {{ '%.2f'|format(branch.monthly_remaining_amount) }} сом</p>
+                {% endif %}
+            </div>
+            {% if can_edit_targets %}
+            <form method="post" action="{{ url_for('update_branch_targets', branch_id=branch.branch_id) }}" class="branch-target-form">
+                <label>Дневная цель <input type="number" min="0" step="0.01" name="daily_target" value="{{ branch.daily_target }}" required></label>
+                <label>Месячная цель <input type="number" min="0" step="0.01" name="monthly_target" value="{{ branch.monthly_target }}" required></label>
+                <button class="primary-btn" type="submit">Сохранить цели</button>
+            </form>
+            {% endif %}
+        </article>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state-box"><p>Нет доступных филиалов.</p></div>
+    {% endif %}
+</section>
+
+<section class="panel-card">
+    <div class="panel-header"><h3>Эффективность за выбранный период</h3></div>
+    {% if branch_performance %}
+    <div class="table-wrap">
+        <table class="data-table dashboard-product-table">
+            <thead>
+                <tr>
+                    <th>Филиал</th>
+                    <th>Фактически оплаченная выручка, сом</th>
+                    <th>Количество продаж</th>
+                    <th>Средний чек, сом</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for branch in branch_performance %}
+                <tr>
+                    <td>{{ branch.branch_name }}</td>
+                    <td>{{ '%.2f'|format(branch.actual_paid_revenue) }} сом</td>
+                    <td>{{ branch.sales_count }}</td>
+                    <td>{{ '%.2f'|format(branch.average_transaction_value) }} сом</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state-box"><p>Нет доступных филиалов.</p></div>
+    {% endif %}
+</section>
+{% endblock %}
