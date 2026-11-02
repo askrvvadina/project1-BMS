@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier, Thread
+from unittest.mock import patch
 
 from sqlalchemy import event
 from sqlalchemy.exc import IntegrityError
@@ -126,6 +127,41 @@ class CustomerPortalTests(unittest.TestCase):
             base_url="https://bms.example.test",
             json={"token": token},
         )
+
+    def test_http_lan_claim_validation_preserves_registration_session(self):
+        _, token = self.create_guest_claim(amount=Decimal("100.00"))
+        self.app.config["PUBLIC_BASE_URL"] = None
+        self.app.config["ENVIRONMENT"] = "development"
+
+        client = self.app.test_client()
+        with patch("app.discover_local_ipv4", return_value="192.168.1.25"):
+            validate = client.post(
+                "/loyalty/claim/validate",
+                base_url="http://192.168.1.25:5000",
+                json={"token": token},
+            )
+        self.assertEqual(validate.status_code, 200)
+        pending_cookie = validate.headers["Set-Cookie"]
+        self.assertNotIn("Secure", pending_cookie)
+
+        register_page = client.get("/portal/register", base_url="http://192.168.1.25:5000")
+        self.assertEqual(register_page.status_code, 200)
+        with client.session_transaction(base_url="http://192.168.1.25:5000") as browser_session:
+            csrf_token = browser_session["portal_csrf_token"]
+        response = client.post(
+            "/portal/register",
+            base_url="http://192.168.1.25:5000",
+            data={
+                "csrf_token": csrf_token,
+                "name": "LAN New Customer",
+                "phone": "996700987654",
+                "password": "lan-password-123",
+                "confirm_password": "lan-password-123",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        with self.app.app_context():
+            self.assertIsNotNone(Customer.query.filter_by(phone="+996700987654").first())
 
     def test_registration_hashes_password_and_creates_one_canonical_customer(self):
         csrf_token = self.csrf()

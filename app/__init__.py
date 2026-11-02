@@ -4,6 +4,7 @@ import hmac
 import hashlib
 import ipaddress
 import secrets
+import socket
 import threading
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -24,10 +25,44 @@ from app.guest_loyalty import (
     make_claim_qr_data_uri,
 )
 from app.loyalty import calculate_earned_points, calculate_redemption_limit
-from app.financial import calculate_financial_summary
+from app.financial import (
+    calculate_category_sales,
+    calculate_daily_sales_revenue,
+    calculate_financial_summary,
+    calculate_low_stock,
+    calculate_monthly_sales_revenue,
+    calculate_top_products,
+)
 
 
 db = SQLAlchemy()
+
+
+def discover_local_ipv4():
+    candidates = []
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect(("192.0.2.1", 9))
+        candidates.append(probe.getsockname()[0])
+        probe.close()
+    except OSError:
+        pass
+
+    try:
+        _, _, resolved_addresses = socket.gethostbyname_ex(socket.gethostname())
+        candidates.extend(resolved_addresses)
+    except (OSError, socket.gaierror):
+        pass
+
+    for candidate in candidates:
+        try:
+            address = ipaddress.ip_address(candidate)
+        except ValueError:
+            continue
+        if isinstance(address, ipaddress.IPv4Address) and address.is_private and not address.is_loopback:
+            return str(address)
+    return None
+
 
 ALLOWED_ROLES = {"employee", "manager"}
 MIN_PASSWORD_LENGTH = 8
@@ -74,6 +109,7 @@ def create_app(config=None):
     )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     app.config["PUBLIC_BASE_URL"] = os.environ.get("BMS_PUBLIC_BASE_URL")
+    app.config["ENVIRONMENT"] = os.environ.get("BMS_ENV", "development").strip().lower()
     app.config["LOYALTY_CLAIM_TTL_DAYS"] = int(
         os.environ.get("BMS_LOYALTY_CLAIM_TTL_DAYS", "7")
     )
@@ -123,11 +159,15 @@ def create_app(config=None):
             )
         app.config["PUBLIC_BASE_URL"] = public_base_url.rstrip("/")
 
+    if app.config["ENVIRONMENT"] == "production" and not app.config["PUBLIC_BASE_URL"]:
+        raise ValueError("PUBLIC_BASE_URL must be configured in production.")
+
     if config is None or "SESSION_COOKIE_SECURE" not in config:
         secure_cookie_setting = os.environ.get("BMS_SESSION_COOKIE_SECURE")
         if secure_cookie_setting is None:
             app.config["SESSION_COOKIE_SECURE"] = (
-                bool(app.config["PUBLIC_BASE_URL"]) or not app.config["TESTING"]
+                bool(app.config["PUBLIC_BASE_URL"])
+                or app.config["ENVIRONMENT"] == "production"
             )
         elif secure_cookie_setting.strip().lower() in {"1", "true", "yes", "on"}:
             app.config["SESSION_COOKIE_SECURE"] = True
@@ -272,6 +312,31 @@ def create_app(config=None):
                     if start < stale_before:
                         del claim_rate_buckets[key]
         return False
+
+    def resolve_guest_claim_base_url():
+        configured_url = app.config.get("PUBLIC_BASE_URL")
+        if configured_url:
+            return configured_url.rstrip("/")
+        if app.config.get("ENVIRONMENT") == "production":
+            return None
+
+        request_host = urlsplit(request.host_url)
+        hostname = (request_host.hostname or "").lower()
+        try:
+            parsed_ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            parsed_ip = None
+        is_loopback = hostname == "localhost" or hostname.endswith(".localhost")
+        if parsed_ip is not None:
+            is_loopback = parsed_ip.is_loopback or parsed_ip.is_unspecified
+        if request_host.scheme == "http" and hostname and not is_loopback:
+            return request.host_url.rstrip("/")
+        if request_host.scheme == "http" and is_loopback:
+            local_ipv4 = discover_local_ipv4()
+            if local_ipv4:
+                port = f":{request_host.port}" if request_host.port else ""
+                return f"http://{local_ipv4}{port}"
+        return None
 
     def resolve_management_branch(explicit_branch_id=None):
         branches = models.Branch.query.order_by(models.Branch.name.asc()).all()
@@ -590,7 +655,126 @@ def create_app(config=None):
     @login_required
     @role_required("admin", "manager", "employee")
     def home():
-        return render_template("dashboard.html")
+        user = db.session.get(models.User, session.get("user_id"))
+        if user is None:
+            session.clear()
+            flash("Сеанс завершён. Войдите в систему снова.", "error")
+            return redirect(url_for("login"))
+
+        role = (user.role or "").lower()
+        branch_id = None
+        branch_options = []
+        if role == "employee":
+            branch_id = models.resolve_employee_branch_id(user)
+            if branch_id is None:
+                return render_template("403.html", requested_path=request.path), 403
+            assigned_branch = db.session.get(models.Branch, branch_id)
+            branch_options = [assigned_branch] if assigned_branch is not None else []
+            if assigned_branch is None:
+                return render_template("403.html", requested_path=request.path), 403
+        else:
+            branch_options = models.Branch.query.order_by(models.Branch.name.asc()).all()
+            branch_value = request.args.get("branch_id", "").strip()
+            if branch_value:
+                try:
+                    requested_branch_id = int(branch_value)
+                except (TypeError, ValueError):
+                    requested_branch_id = None
+                selected_branch = (
+                    db.session.get(models.Branch, requested_branch_id)
+                    if requested_branch_id is not None else None
+                )
+                if selected_branch is None:
+                    flash("Выбранный филиал не найден.", "error")
+                else:
+                    branch_id = selected_branch.id
+
+        today = date.today()
+        default_start = today.replace(day=1)
+        try:
+            default_start = (datetime(today.year, today.month, 1) - timedelta(days=334)).date()
+        except ValueError:
+            default_start = today - timedelta(days=334)
+        start_value = request.args.get("start_date", default_start.isoformat()).strip()
+        end_value = request.args.get("end_date", today.isoformat()).strip()
+        invalid_dates = False
+        try:
+            date_from = date.fromisoformat(start_value)
+        except (TypeError, ValueError):
+            date_from = default_start
+            invalid_dates = True
+        try:
+            date_to = date.fromisoformat(end_value)
+        except (TypeError, ValueError):
+            date_to = today
+            invalid_dates = True
+        if date_from > date_to:
+            invalid_dates = True
+        if invalid_dates:
+            date_from = default_start
+            date_to = today
+            flash("Некорректный диапазон дат. Исправьте начальную и конечную даты.", "error")
+
+        chart_start_date = date_from
+        chart_end_date = date_to
+        if "start_date" not in request.args and "end_date" not in request.args:
+            chart_end_date = today
+            chart_start_date = today - timedelta(days=29)
+
+        financial_summary = calculate_financial_summary(
+            date_from=date_from, date_to=date_to, branch_id=branch_id
+        )
+        sales_query = models.Sale.query.filter(
+            models.Sale.created_at >= datetime.combine(date_from, datetime.min.time()),
+            models.Sale.created_at < datetime.combine(date_to + timedelta(days=1), datetime.min.time()),
+        )
+        products_query = models.Product.query
+        employees_query = models.Employee.query.filter(
+            db.func.lower(models.Employee.status) == "active"
+        )
+        if branch_id is not None:
+            sales_query = sales_query.filter(models.Sale.branch_id == branch_id)
+            products_query = products_query.filter(models.Product.branch_id == branch_id)
+            employees_query = employees_query.filter(models.Employee.branch_id == branch_id)
+
+        dashboard = {
+            "actual_paid_sales": financial_summary["actual_paid_sales"],
+            "sales_count": sales_query.count(),
+            "active_products": products_query.count(),
+            "active_employees": employees_query.count(),
+            "total_expenses": financial_summary["total_expenses"],
+            "operational_difference": financial_summary["operational_difference"],
+        }
+        daily_sales = calculate_daily_sales_revenue(start_date=chart_start_date, end_date=chart_end_date, branch_id=branch_id)
+        monthly_chart_start = None
+        if "start_date" in request.args or "end_date" in request.args:
+            monthly_chart_start = date_from
+        monthly_sales = calculate_monthly_sales_revenue(start_date=monthly_chart_start, end_date=chart_end_date, branch_id=branch_id)
+        top_products = calculate_top_products(branch_id=branch_id, date_from=date_from, date_to=date_to)
+        category_sales = calculate_category_sales(branch_id=branch_id, date_from=date_from, date_to=date_to)
+        category_chart = [
+            {
+                "category_name": row["category_name"],
+                "gross_sales": float(row["gross_sales"]),
+            }
+            for row in category_sales
+        ]
+        low_stock = calculate_low_stock(branch_id=branch_id)
+        return render_template(
+            "dashboard.html",
+            dashboard=dashboard,
+            daily_sales=daily_sales,
+            monthly_sales=monthly_sales,
+            top_products=top_products,
+            category_sales=category_sales,
+            category_chart=category_chart,
+            low_stock=low_stock,
+            branch_options=branch_options,
+            selected_branch_id=branch_id,
+            filter_start_date=start_value if invalid_dates else date_from.isoformat(),
+            filter_end_date=end_value if invalid_dates else date_to.isoformat(),
+            filter_is_employee=(role == "employee"),
+        )
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
@@ -1396,6 +1580,8 @@ def create_app(config=None):
                 "branch_id",
                 "purchase_price",
                 "selling_price",
+                "stock_quantity",
+                "minimum_stock",
             ):
                 form_data[field] = request.form.get(field, "").strip()
 
@@ -1404,6 +1590,13 @@ def create_app(config=None):
                 product = models.Product(**product_data)
                 try:
                     db.session.add(product)
+                    db.session.flush()
+                    db.session.add(models.BranchInventory(
+                        branch_id=product_data["branch_id"],
+                        product_id=product.id,
+                        stock_quantity=product_data["stock_quantity"],
+                        minimum_stock=product_data["minimum_stock"],
+                    ))
                     db.session.commit()
                 except SQLAlchemyError:
                     db.session.rollback()
@@ -2403,7 +2596,7 @@ def create_app(config=None):
                     "bms_pending_loyalty_claim",
                     token,
                     max_age=remaining_seconds,
-                    secure=True,
+                    secure=urlsplit(resolve_guest_claim_base_url() or "").scheme == "https",
                     httponly=True,
                     samesite="Lax",
                     path="/portal",
@@ -2544,7 +2737,7 @@ def create_app(config=None):
         response.delete_cookie(
             "bms_pending_loyalty_claim",
             path="/portal",
-            secure=True,
+            secure=(urlsplit(request.host_url).scheme == "https"),
             httponly=True,
             samesite="Lax",
         )
@@ -2752,7 +2945,7 @@ def create_app(config=None):
         response.delete_cookie(
             "bms_pending_loyalty_claim",
             path="/portal",
-            secure=True,
+            secure=(urlsplit(request.host_url).scheme == "https"),
             httponly=True,
             samesite="Lax",
         )
@@ -2802,7 +2995,8 @@ def create_app(config=None):
         customer_balance = None
         claim_qr_data_uri = None
         claim_points = 0
-        claim_link_configured = bool(app.config["PUBLIC_BASE_URL"])
+        claim_link_base_url = resolve_guest_claim_base_url()
+        claim_link_configured = bool(claim_link_base_url)
         if customer is not None:
             earned_transaction = models.LoyaltyTransaction.query.filter_by(
                 customer_id=customer.id,
@@ -2847,7 +3041,7 @@ def create_app(config=None):
             ):
                 claim_points = claim.points
                 claim_url = (
-                    f"{app.config['PUBLIC_BASE_URL']}/loyalty/claim#{token}"
+                    f"{claim_link_base_url}/loyalty/claim#{token}"
                 )
                 claim_qr_data_uri = make_claim_qr_data_uri(claim_url)
         response = make_response(render_template(
@@ -2930,6 +3124,8 @@ def create_app(config=None):
 
         user_id = session.get("user_id")
         claim_token = None
+        guest_claim_points = 0
+        guest_claim_qr_data_uri = None
         try:
             with db.session.begin():
                 if db.engine.dialect.name == "sqlite":
@@ -3150,12 +3346,13 @@ def create_app(config=None):
                         ttl = timedelta(
                             days=app.config["LOYALTY_CLAIM_TTL_DAYS"]
                         )
+                        guest_claim_points = calculate_earned_points(amount_paid)
                         db.session.add(
                             models.GuestLoyaltyClaim(
                                 sale_id=sale.id,
                                 branch_id=branch.id,
                                 token_hash=token_hash,
-                                points=calculate_earned_points(sale_total),
+                                points=guest_claim_points,
                                 expires_at=(
                                     datetime.now(timezone.utc).replace(tzinfo=None)
                                     + ttl
@@ -3174,6 +3371,16 @@ def create_app(config=None):
                     "customer_balance": customer_balance if customer is not None else None,
                     "stock": stock_after_sale,
                 }
+                claim_link_base_url = resolve_guest_claim_base_url()
+                if claim_token is not None and claim_link_base_url:
+                    claim_url = f"{claim_link_base_url}/loyalty/claim#{claim_token}"
+                    guest_claim_qr_data_uri = make_claim_qr_data_uri(claim_url)
+                    response_data["guest_claim_qr_data_uri"] = guest_claim_qr_data_uri
+                    response_data["guest_claim_points"] = guest_claim_points
+                elif claim_token is not None:
+                    response_data["guest_claim_configuration_error"] = (
+                        "QR-код временно недоступен: настройте BMS_PUBLIC_BASE_URL или откройте POS через доступный сети адрес."
+                    )
         except CheckoutError as error:
             db.session.rollback()
             return jsonify(error=str(error)), 400

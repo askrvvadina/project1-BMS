@@ -337,6 +337,24 @@ document.addEventListener('DOMContentLoaded', function () {
                     receiptLink.href = result.receipt_url;
                     receiptLink.textContent = 'Посмотреть чек';
                     feedback.append(receiptLink);
+                    if (result.guest_claim_qr_data_uri) {
+                        const claim = document.createElement('div');
+                        claim.className = 'pos-loyalty-claim';
+                        const image = document.createElement('img');
+                        image.src = result.guest_claim_qr_data_uri;
+                        image.alt = 'QR-код для получения бонусных баллов';
+                        image.width = 220;
+                        image.height = 220;
+                        const text = document.createElement('p');
+                        text.textContent = 'Получите ' + result.guest_claim_points + ' бонусных баллов. QR-код действует для этой покупки.';
+                        claim.append(image, text);
+                        feedback.append(claim);
+                    } else if (result.guest_claim_configuration_error) {
+                        const warning = document.createElement('p');
+                        warning.className = 'pos-loyalty-claim-warning';
+                        warning.textContent = result.guest_claim_configuration_error;
+                        feedback.append(warning);
+                    }
                 }
             } catch (error) {
                 isSubmitting = false;

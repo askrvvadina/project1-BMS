@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier, Thread
+from unittest.mock import patch
 
 from sqlalchemy import event
 from sqlalchemy.exc import IntegrityError
@@ -417,6 +418,8 @@ class SalesCheckoutTests(unittest.TestCase):
         self.assertEqual(response.json["redeemed_points"], 40)
         self.assertEqual(response.json["earned_points"], 1)
         self.assertEqual(response.json["customer_balance"], 161)
+        self.assertNotIn("guest_claim_qr_data_uri", response.json)
+        self.assertNotIn("guest_claim_points", response.json)
 
         with self.app.app_context():
             sale = db.session.get(Sale, response.json["sale_id"])
@@ -696,6 +699,9 @@ class SalesCheckoutTests(unittest.TestCase):
         )
         self.assertEqual(checkout.status_code, 201)
         sale_id = checkout.json["sale_id"]
+        self.assertIn("guest_claim_qr_data_uri", checkout.json)
+        self.assertTrue(checkout.json["guest_claim_qr_data_uri"].startswith("data:image/svg+xml;base64,"))
+        self.assertEqual(checkout.json["guest_claim_points"], 1)
         self.assertNotIn("token", checkout.json)
         self.assertNotIn("claim_token", checkout.json)
         set_cookie = checkout.headers["Set-Cookie"]
@@ -916,6 +922,50 @@ class SalesCheckoutTests(unittest.TestCase):
         self.assertEqual(first.status_code, 404)
         self.assertEqual(second.status_code, 429)
         self.assertEqual(second.headers["Retry-After"], "60")
+
+    def test_localhost_guest_checkout_uses_discovered_lan_address(self):
+        self.app.config["PUBLIC_BASE_URL"] = None
+        client = self.client_for("employee")
+        with patch("app.discover_local_ipv4", return_value="192.168.1.25"):
+            checkout = self.submit(client, [{"product_id": self.ids["phone"], "quantity": 1}])
+        self.assertEqual(checkout.status_code, 201)
+        self.assertIn("guest_claim_qr_data_uri", checkout.json)
+        self.assertNotIn("guest_claim_configuration_error", checkout.json)
+
+    def test_guest_checkout_without_lan_address_has_configuration_warning(self):
+        self.app.config["PUBLIC_BASE_URL"] = None
+        client = self.client_for("employee")
+        with patch("app.discover_local_ipv4", return_value=None):
+            checkout = self.submit(client, [{"product_id": self.ids["phone"], "quantity": 1}])
+        self.assertEqual(checkout.status_code, 201)
+        self.assertIn("guest_claim_configuration_error", checkout.json)
+        self.assertNotIn("guest_claim_qr_data_uri", checkout.json)
+
+    def test_lan_address_access_is_used_without_discovery(self):
+        self.app.config["PUBLIC_BASE_URL"] = None
+        self.app.config["SESSION_COOKIE_SECURE"] = False
+        client = self.app.test_client()
+        with client.session_transaction(base_url="http://192.168.1.25:5000") as browser_session:
+            browser_session["user_id"] = self.ids["employee"]
+            browser_session["role"] = "employee"
+        with patch("app.discover_local_ipv4") as discover:
+            checkout = client.post(
+                "/sales/checkout",
+                json={"items": [{"product_id": self.ids["phone"], "quantity": 1}], "payment_method": "cash"},
+                base_url="http://192.168.1.25:5000",
+            )
+        discover.assert_not_called()
+        self.assertEqual(checkout.status_code, 201)
+        self.assertIn("guest_claim_qr_data_uri", checkout.json)
+
+    def test_production_requires_explicit_public_base_url(self):
+        with self.assertRaises(ValueError):
+            create_app({
+                "TESTING": True,
+                "ENVIRONMENT": "production",
+                "SQLALCHEMY_DATABASE_URI": "sqlite://",
+                "PUBLIC_BASE_URL": None,
+            })
 
     def test_public_base_url_must_be_reachable_https(self):
         for invalid_url in (

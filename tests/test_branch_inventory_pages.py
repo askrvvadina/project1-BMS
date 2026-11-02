@@ -90,6 +90,7 @@ class BranchInventoryPageTests(unittest.TestCase):
             self.ids = {
                 "hq": self.hq.id,
                 "main": self.main.id,
+                "category": category.id,
                 "admin": admin.id,
                 "employee": employee_user.id,
                 "product": self.product.id,
@@ -215,10 +216,38 @@ class BranchInventoryPageTests(unittest.TestCase):
         edit_response = client.get(f"/products/{self.ids['product']}/edit")
 
         for response in (create_response, edit_response):
-            self.assertNotIn(b'name="stock_quantity"', response.data)
-            self.assertNotIn(b'name="minimum_stock"', response.data)
-            self.assertNotIn(b'name="branch_id"', response.data)
+            self.assertIn(b'name="stock_quantity"', create_response.data)
+            self.assertIn(b'name="minimum_stock"', create_response.data)
+            self.assertIn(b'name="branch_id"', create_response.data)
+            self.assertNotIn(b'name="stock_quantity"', edit_response.data)
+            self.assertNotIn(b'name="minimum_stock"', edit_response.data)
+            self.assertNotIn(b'name="branch_id"', edit_response.data)
             self.assertNotIn("Устаревший".encode("utf-8"), response.data)
+
+    def test_admin_can_create_product_with_branch_inventory(self):
+        client = self.client_for("admin")
+        response = client.post("/products/create", data={
+            "name": "New product",
+            "sku": "NEW-PRODUCT-1",
+            "category_id": str(self.ids["category"]),
+            "branch_id": str(self.ids["main"]),
+            "purchase_price": "10.00",
+            "selling_price": "15.00",
+            "stock_quantity": "12",
+            "minimum_stock": "3",
+        })
+        self.assertEqual(response.status_code, 302)
+
+        with self.app.app_context():
+            product = Product.query.filter_by(sku="NEW-PRODUCT-1").first()
+            inventory = BranchInventory.query.filter_by(
+                branch_id=self.ids["main"],
+                product_id=product.id,
+            ).first()
+            self.assertIsNotNone(product)
+            self.assertIsNotNone(inventory)
+            self.assertEqual(inventory.stock_quantity, 12)
+            self.assertEqual(inventory.minimum_stock, 3)
 
 
 if __name__ == "__main__":

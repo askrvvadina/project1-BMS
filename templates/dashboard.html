@@ -13,38 +13,160 @@
     <button class="primary-btn" type="button">Сформировать отчёт</button>
 </section>
 
+<section class="panel-card dashboard-filter-card" aria-label="Фильтры дашборда">
+    <form method="get" action="{{ url_for('home') }}" class="dashboard-filter-form">
+        <div class="dashboard-filter-field">
+            <label for="dashboardStartDate">Начальная дата</label>
+            <input id="dashboardStartDate" type="date" name="start_date" value="{{ filter_start_date }}">
+        </div>
+        <div class="dashboard-filter-field">
+            <label for="dashboardEndDate">Конечная дата</label>
+            <input id="dashboardEndDate" type="date" name="end_date" value="{{ filter_end_date }}">
+        </div>
+        <div class="dashboard-filter-field">
+            <label for="dashboardBranch">Филиал</label>
+            {% if filter_is_employee %}
+            <select id="dashboardBranch" disabled>
+                {% for branch in branch_options %}
+                <option value="{{ branch.id }}" selected>{{ branch.name }}</option>
+                {% endfor %}
+            </select>
+            {% else %}
+            <select id="dashboardBranch" name="branch_id">
+                <option value="" {% if selected_branch_id is none %}selected{% endif %}>Все разрешённые филиалы</option>
+                {% for branch in branch_options %}
+                <option value="{{ branch.id }}" {% if selected_branch_id == branch.id %}selected{% endif %}>{{ branch.name }}</option>
+                {% endfor %}
+            </select>
+            {% endif %}
+        </div>
+        <div class="dashboard-filter-actions">
+            <button class="primary-btn" type="submit">Применить фильтры</button>
+            <a class="secondary-btn" href="{{ url_for('home') }}">Сбросить</a>
+        </div>
+    </form>
+</section>
+
 <section class="stats-grid" aria-label="Сводка по бизнесу">
     <article class="stat-card revenue">
         <div class="stat-header">
             <span class="stat-label">Выручка</span>
         </div>
-        <h3>$0</h3>
-        <p>по сравнению с прошлым месяцем</p>
+        <h3>{{ '%.2f'|format(dashboard.actual_paid_sales) }} сом</h3>
+        <p>Фактически оплаченная выручка</p>
     </article>
 
     <article class="stat-card sales">
         <div class="stat-header">
             <span class="stat-label">Продажи</span>
         </div>
-        <h3>0 продаж</h3>
-        <p>Заказы за этот период</p>
+        <h3>{{ dashboard.sales_count }} продаж</h3>
+        <p>Всего продаж</p>
     </article>
 
     <article class="stat-card products">
         <div class="stat-header">
             <span class="stat-label">Товары</span>
         </div>
-        <h3>0</h3>
-        <p>Товаров в каталоге</p>
+        <h3>{{ dashboard.active_products }}</h3>
+        <p>Активные товары — текущее значение</p>
     </article>
 
     <article class="stat-card employees">
         <div class="stat-header">
             <span class="stat-label">Сотрудники</span>
         </div>
-        <h3>0</h3>
-        <p>Активные сотрудники</p>
+        <h3>{{ dashboard.active_employees }}</h3>
+        <p>Активные сотрудники — текущее значение</p>
     </article>
+
+    <article class="stat-card products">
+        <div class="stat-header">
+            <span class="stat-label">Расходы</span>
+        </div>
+        <h3>{{ '%.2f'|format(dashboard.total_expenses) }} сом</h3>
+        <p>Операционные расходы</p>
+    </article>
+
+    <article class="stat-card revenue">
+        <div class="stat-header">
+            <span class="stat-label">Операционная разница</span>
+        </div>
+        <h3>{{ '%.2f'|format(dashboard.operational_difference) }} сом</h3>
+        <p>Оплаченная выручка минус расходы</p>
+    </article>
+</section>
+
+<section class="dashboard-charts-grid" aria-label="Графики продаж">
+    <article class="panel-card dashboard-chart-card">
+        <div class="panel-header"><h3>Продажи за последние 30 дней</h3></div>
+        <div class="dashboard-chart-wrap">
+            <canvas id="dailySalesChart" aria-label="График дневной выручки" role="img"></canvas>
+        </div>
+        {% if daily_sales['values'] and daily_sales['values'] | select('ne', 0) | list | length == 0 %}
+        <p class="dashboard-chart-empty">За выбранный период продаж нет.</p>
+        {% endif %}
+    </article>
+    <article class="panel-card dashboard-chart-card">
+        <div class="panel-header"><h3>Продажи за последние 12 месяцев</h3></div>
+        <div class="dashboard-chart-wrap">
+            <canvas id="monthlySalesChart" aria-label="График месячной выручки" role="img"></canvas>
+        </div>
+        {% if monthly_sales['values'] and monthly_sales['values'] | select('ne', 0) | list | length == 0 %}
+        <p class="dashboard-chart-empty">За выбранный период продаж нет.</p>
+        {% endif %}
+    </article>
+</section>
+<script id="dailySalesData" type="application/json">{{ daily_sales | tojson }}</script>
+<script id="monthlySalesData" type="application/json">{{ monthly_sales | tojson }}</script>
+
+<section class="dashboard-product-grid">
+    <article class="panel-card">
+        <div class="panel-header"><h3>Топ-5 товаров по количеству</h3></div>
+        {% if top_products %}
+        <div class="table-wrap">
+            <table class="data-table dashboard-product-table">
+                <thead><tr><th>Товар</th><th>Продано</th><th>Сумма продаж, сом</th></tr></thead>
+                <tbody>
+                {% for product in top_products %}
+                <tr><td>{{ product.product_name }}</td><td>{{ product.units_sold }}</td><td>{{ '%.2f'|format(product.gross_sales) }}</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state-box"><p>Проданные товары отсутствуют.</p></div>
+        {% endif %}
+    </article>
+
+    <article class="panel-card dashboard-chart-card">
+        <div class="panel-header"><h3>Продажи по категориям, валовые</h3></div>
+        <div class="dashboard-chart-wrap dashboard-category-chart-wrap">
+            <canvas id="categorySalesChart" aria-label="График валовых продаж по категориям" role="img"></canvas>
+        </div>
+        {% if not category_sales %}
+        <p class="dashboard-chart-empty">Продажи по категориям отсутствуют.</p>
+        {% endif %}
+    </article>
+</section>
+<script id="categorySalesData" type="application/json">{{ category_chart | tojson }}</script>
+
+<section class="panel-card dashboard-low-stock-card">
+    <div class="panel-header"><h3>Товары с низким остатком — текущее состояние складов</h3></div>
+    {% if low_stock %}
+    <div class="table-wrap">
+        <table class="data-table dashboard-product-table">
+            <thead><tr><th>Товар</th><th>Филиал</th><th>Остаток</th><th>Минимум</th></tr></thead>
+            <tbody>
+            {% for item in low_stock %}
+            <tr><td>{{ item.product_name }}</td><td>{{ item.branch_name }}</td><td>{{ item.stock_quantity }}</td><td>{{ item.minimum_stock }}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state-box"><p>Товаров с низким остатком нет.</p></div>
+    {% endif %}
 </section>
 
 <section class="content-grid">
@@ -70,4 +192,6 @@
         </div>
     </article>
 </section>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" defer></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}" defer></script>
 {% endblock %}
